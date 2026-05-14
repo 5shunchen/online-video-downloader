@@ -92,8 +92,8 @@ async function search() {
               · ${escapeHTML(v.type_name||'')}
               · 源: ${escapeHTML(v.source_name)}
             </p>
-            <button class="btn btn-sm btn-outline-primary"
-                    onclick='openDetail(${JSON.stringify(v.source_name)},${v.vod_id},${JSON.stringify(v.name)})'>
+            <button class="btn btn-sm btn-outline-primary open-detail-btn"
+                    data-source="${v.source_name}" data-vodid="${v.vod_id}" data-name="${v.name}">
               查看分集
             </button>
           </div>
@@ -218,6 +218,15 @@ function escapeHTML(s) {
 
 $('#btnSearch').onclick = search;
 $('#kw').addEventListener('keyup', e => { if (e.key === 'Enter') search(); });
+
+// 事件委托：处理搜索结果卡片里的"查看分集"按钮
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.open-detail-btn');
+  if (btn) {
+    openDetail(btn.dataset.source, parseInt(btn.dataset.vodid), btn.dataset.name);
+  }
+});
+
 loadMeta();
 refreshJobs();
 setInterval(refreshJobs, 2000);

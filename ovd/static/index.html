@@ -26,12 +26,18 @@
   <!-- 搜索视图 -->
   <div id="searchView">
     <div class="input-group mb-3">
+      <select id="sourceSelect" class="form-select" style="max-width: 150px;">
+        <option value="">全部源</option>
+      </select>
       <input id="kw" type="text" class="form-control"
              placeholder="输入关键字, 例如「遮天」" />
       <button id="btnSearch" class="btn btn-primary">🔍 搜索</button>
     </div>
     <div id="results" class="row g-3 mb-4"></div>
     <h5>📥 下载任务</h5>
+    <div class="alert alert-info py-2 mb-2" id="downloadStatus">
+      📥 下载中: <strong>0/3</strong> | ⏳ 排队中: 0 | ✅ 完成: 0 | ❌ 失败: 0
+    </div>
     <div class="mb-2">
       <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(true)">全选</button>
       <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(false)">全不选</button>
@@ -58,6 +64,9 @@
       <div class="card-body text-muted">加载中…</div>
     </div>
     <h5>📥 下载任务</h5>
+    <div class="alert alert-info py-2 mb-2" id="downloadStatus">
+      📥 下载中: <strong>0/3</strong> | ⏳ 排队中: 0 | ✅ 完成: 0 | ❌ 失败: 0
+    </div>
     <div class="mb-2">
       <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(true)">全选</button>
       <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(false)">全不选</button>
@@ -111,15 +120,19 @@
   async function search() {
     const kw = $('#kw').value.trim();
     if (!kw) return;
+    const source = $('#sourceSelect').value;
     $('#results').innerHTML = '<div class="text-muted">搜索中…</div>';
-    const data = await api('/api/search?wd=' + encodeURIComponent(kw));
+    const url = source
+      ? `/api/search?wd=${encodeURIComponent(kw)}&source=${encodeURIComponent(source)}`
+      : `/api/search?wd=${encodeURIComponent(kw)}`;
+    const data = await api(url);
     if (!data.items.length) {
       $('#results').innerHTML =
         '<div class="alert alert-warning">没有找到结果, 换个关键字试试。</div>';
       return;
     }
     $('#results').innerHTML = data.items.map((v, i) => `
-      <div class="col-md-6">
+      <div class="col-md-6 result-card" data-source="${v.source_name}" data-vod-id="${v.vod_id}">
         <div class="card h-100"><div class="row g-0">
           <div class="col-auto p-2">
             <img class="cover" src="${v.pic || ''}"
@@ -136,19 +149,62 @@
                 · ${escapeHTML(v.type_name||'')}
                 · 源: ${escapeHTML(v.source_name)}
               </p>
-              <button class="btn btn-sm btn-outline-primary"
-                      onclick="handleOpenDetail('${v.source_name.replace(/'/g,"\\'")}', ${v.vod_id}, '${v.name.replace(/'/g,"\\'")}')">
-                查看分集
+              <button class="btn btn-sm btn-outline-primary detail-btn"
+                      data-source="${v.source_name}" data-vod-id="${v.vod_id}" data-name="${v.name.replace(/'/g,"\\'")}">
+                <span class="status-text">查看分集</span>
               </button>
             </div>
           </div>
         </div></div>
       </div>
     `).join('');
+
+    // 绑定点击事件
+    document.querySelectorAll('.detail-btn').forEach(btn => {
+      btn.onclick = () => handleOpenDetail(btn.dataset.source, parseInt(btn.dataset.vodId), btn.dataset.name);
+    });
+
+    // 后台异步验证搜索结果可用性
+    validateSearchResults(data.items);
+  }
+
+  // 后台异步验证搜索结果
+  async function validateSearchResults(items) {
+    for (const v of items) {
+      try {
+        const card = document.querySelector(`.result-card[data-source="${v.source_name}"][data-vod-id="${v.vod_id}"]`);
+        if (!card) continue;
+        const btn = card.querySelector('.detail-btn');
+        if (!btn) continue;
+
+        // 发送轻量验证请求
+        const resp = await fetch(`/api/detail?source_name=${encodeURIComponent(v.source_name)}&vod_id=${v.vod_id}`);
+        if (!resp.ok) {
+          // 标记为失效
+          card.style.opacity = '0.5';
+          btn.disabled = true;
+          btn.querySelector('.status-text').textContent = '链接已失效';
+          btn.classList.remove('btn-outline-primary');
+          btn.classList.add('btn-outline-secondary');
+        }
+      } catch (e) {
+        // 忽略错误
+      }
+      // 控制并发
+      await new Promise(r => setTimeout(r, 200));
+    }
   }
 
   // 打开详情页
   async function handleOpenDetail(sourceName, vodId, videoName) {
+    // 先在后台验证，成功才跳转
+    try {
+      const d = await api(`/api/detail?source_name=${encodeURIComponent(sourceName)}&vod_id=${vodId}`);
+    } catch (e) {
+      alert('该剧集播放源已失效，请换其他剧集试试');
+      return;
+    }
+
     showView('detail');
     $('#detailTitle').textContent = '📺 加载中...';
     $('#detailCard').innerHTML = '<div class="card-body text-muted">加载中…</div>';
@@ -252,6 +308,18 @@
 
   async function refreshJobs() {
     const data = await api('/api/jobs');
+    // 统计队列状态
+    const stats = {
+      downloading: data.jobs.filter(j => j.status === 'downloading').length,
+      queued: data.jobs.filter(j => j.status === 'queued').length,
+      completed: data.jobs.filter(j => j.status === 'completed').length,
+      failed: data.jobs.filter(j => j.status === 'failed').length,
+    };
+    // 更新状态栏
+    const statusEl = document.getElementById('downloadStatus');
+    if (statusEl) {
+      statusEl.innerHTML = `📥 下载中: <strong>${stats.downloading}/3</strong> | ⏳ 排队中: ${stats.queued} | ✅ 完成: ${stats.completed} | ❌ 失败: ${stats.failed}`;
+    }
     const html = data.jobs.map(j => {
       const cls = ({
         queued:'bg-secondary', downloading:'bg-primary',
@@ -310,6 +378,14 @@
   api('/api/version').then(v => {
     $('#meta').textContent =
       `v${v.version} · 下载至 ${v.download_dir} · 数据源 ${v.sources.map(s=>s.name).join('/')}`;
+    // 填充数据源下拉框
+    const select = $('#sourceSelect');
+    v.sources.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.name;
+      opt.textContent = s.name;
+      select.appendChild(opt);
+    });
   });
   refreshJobs();
   setInterval(refreshJobs, 2000);

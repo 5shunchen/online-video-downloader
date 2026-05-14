@@ -1,42 +1,43 @@
 # -*- mode: python ; coding: utf-8 -*-
+# PyInstaller 打包配置
 
 import os
-import sys
-from pathlib import Path
 
-# 项目根目录
-ROOT = Path(os.path.abspath(os.path.dirname(__file__)))
+block_cipher = None
 
-# 手动收集静态文件
+# 数据源
 datas = [
-    (str(ROOT / 'ovd' / 'static' / 'index.html'), 'ovd/static'),
+    ('ovd/static/index.html', 'ovd/static'),
 ]
 
-# 添加 ffmpeg (Windows 版本会在打包时下载)
+# 内置 ffmpeg
 ffmpeg_path = os.environ.get('FFMPEG_PATH', '')
 if ffmpeg_path and os.path.exists(ffmpeg_path):
     datas.append((ffmpeg_path, '.'))
 
 a = Analysis(
-    [str(ROOT / 'ovd' / '__main__.py')],
-    pathex=[str(ROOT)],
+    ['ovd/__main__.py'],
+    pathex=[],
     binaries=[],
     datas=datas,
     hiddenimports=[
-        'uvicorn.loops',
         'uvicorn.loops.auto',
-        'uvicorn.protocols',
-        'uvicorn.protocols.http',
         'uvicorn.protocols.http.auto',
-        'uvicorn.protocols.websockets',
         'uvicorn.protocols.websockets.auto',
+        'uvicorn.lifespan.off',
+        'uvicorn.lifespan.on',
         'fastapi',
         'fastapi.responses',
         'httpx',
         'cryptography',
-        'ovd.web.app',
+        'ovd',
         'ovd.config',
+        'ovd.api',
+        'ovd.api.maccms',
+        'ovd.downloader',
         'ovd.downloader.jobs',
+        'ovd.web',
+        'ovd.web.app',
     ],
     hookspath=[],
     hooksconfig={},
@@ -50,15 +51,19 @@ a = Analysis(
         'numpy',
         'pandas',
     ],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure)
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
+    a.zipfiles,
     a.datas,
     [],
     name='ovd',

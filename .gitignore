@@ -1,0 +1,39 @@
+# 字节码 / 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# 测试 / 类型检查
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 项目运行时产物
+downloads/
+*.mp4
+*.ts
+*.m3u8
+*.log
+ovd.db
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 私密配置
+.env
+*.local.toml

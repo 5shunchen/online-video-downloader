@@ -25,7 +25,13 @@ from ..api import MacCMSClient
 from ..config import Settings
 from ..downloader import JobManager
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+import sys
+
+# PyInstaller 兼容：从临时目录加载静态文件
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    STATIC_DIR = Path(sys._MEIPASS) / 'ovd' / 'static'
+else:
+    STATIC_DIR = Path(__file__).resolve().parent.parent / 'static'
 
 
 class EpisodeIn(BaseModel):

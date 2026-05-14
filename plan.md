@@ -16,11 +16,11 @@
 
 | 版本 | 类型 | 目标 |
 | --- | --- | --- |
-| **0.1.0** | MINOR | 首发 MVP: 搜索 + 单集下载 + 批量下载 + 本地 Web UI |
-| 0.2.0 | MINOR | 多采集源切换 / 失败重试 / 下载队列持久化 |
-| 0.3.0 | MINOR | 字幕嵌入、画质选择、断点续传 |
-| 0.4.0 | MINOR | 历史记录、收藏、暗黑模式 |
-| 0.5.0 | MINOR | 一键打包 (PyInstaller) 单文件可执行 |
+| **0.1.0** | MINOR | 首发 MVP: 搜索 + 单集下载 + 批量下载 + 本地 Web UI ✅ |
+| **0.2.0** | MINOR | PyInstaller 一键打包 Windows 单文件 exe（内置 ffmpeg） |
+| 0.3.0 | MINOR | 多采集源切换 / 失败重试 / 下载队列持久化 |
+| 0.4.0 | MINOR | 字幕嵌入、画质选择、断点续传 |
+| 0.5.0 | MINOR | 历史记录、收藏、暗黑模式 |
 | 1.0.0 | MAJOR | 稳定版, 文档完善, 发布到 GitHub Releases |
 
 后续每个版本前先按 `prompt.md` 规则检查 `gh issue list`, 有未关闭 issue 优先发 PATCH。

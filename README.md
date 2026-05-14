@@ -14,6 +14,14 @@
 
 ## 安装
 
+### Windows 用户（推荐）
+
+直接下载 `ovd.exe`，双击即可使用，无需安装任何依赖。
+
+下载地址: https://github.com/5shunchen/online-video-downloader/releases
+
+### 开发者 / Linux / macOS 用户
+
 ```bash
 # 安装依赖
 pip install -r requirements.txt
@@ -22,16 +30,13 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-依赖 `ffmpeg`，请先安装并加入 PATH:
+依赖 `ffmpeg`:
 ```bash
 # Ubuntu/Debian
 sudo apt install ffmpeg
 
 # macOS
 brew install ffmpeg
-
-# Windows
-# 从 https://ffmpeg.org/download.html 下载
 ```
 
 ## 使用
@@ -44,7 +49,7 @@ python -m ovd
 python -m ovd --port 8888 --download-dir ./videos
 ```
 
-打开浏览器访问即可使用。
+Windows exe 用户直接双击运行即可，会自动打开浏览器。
 
 ## 命令行选项
 
@@ -60,8 +65,14 @@ python -m ovd --port 8888 --download-dir ./videos
 - **后端**: Python + FastAPI + httpx + asyncio
 - **下载引擎**: 8 并发拉取 TS 分片，AES-128 自动解密，二进制拼接后 ffmpeg 转封装
 - **前端**: 原生 HTML + Bootstrap 5 + JavaScript (无构建链)
+- **打包**: PyInstaller 单文件 exe（内置 ffmpeg）
 
 ## 版本历史
+
+### v0.2.0 (规划中)
+- 🪟 Windows 单文件 exe 发布
+- ✅ 内置 ffmpeg
+- ✅ 双击即用，自动打开浏览器
 
 ### v0.1.0 (2026-05-15)
 - 🎉 首个版本发布

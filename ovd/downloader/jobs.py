@@ -27,7 +27,11 @@ try:
 except ImportError:
     HAS_CRYPTO = False
 
-from ..config import Settings
+# PyInstaller 兼容：优先绝对导入
+try:
+    from ovd.config import Settings
+except ImportError:
+    from ..config import Settings
 
 
 # --- ffmpeg 路径检测（支持 PyInstaller 打包） ---

@@ -20,12 +20,20 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .. import __version__
-from ..api import MacCMSClient
-from ..config import Settings
-from ..downloader import JobManager
-
 import sys
+from pathlib import Path
+
+# PyInstaller 兼容：优先绝对导入
+try:
+    from ovd import __version__
+    from ovd.api import MacCMSClient
+    from ovd.config import Settings
+    from ovd.downloader import JobManager
+except ImportError:
+    from .. import __version__
+    from ..api import MacCMSClient
+    from ..config import Settings
+    from ..downloader import JobManager
 
 # PyInstaller 兼容：从临时目录加载静态文件
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -86,11 +94,17 @@ async def api_version() -> dict:
 
 
 @app.get("/api/search")
-async def api_search(wd: str) -> dict:
+async def api_search(wd: str, source: str | None = None) -> dict:
     client: MacCMSClient = app.state.client
     items = await client.search(wd)
+
+    # 按数据源筛选
+    if source:
+        items = [v for v in items if v.source_name == source]
+
     return {
         "keyword": wd,
+        "source": source,
         "count": len(items),
         "items": [
             {
@@ -119,13 +133,40 @@ def _detect_quality(v) -> str:
     return '高清'
 
 
+async def _validate_source_url(client, url: str) -> bool:
+    """验证播放链接是否有效"""
+    try:
+        resp = await client.get(url, follow_redirects=True)
+        if resp.status_code != 200:
+            return False
+        content_type = resp.headers.get("content-type", "")
+        if "html" in content_type.lower():
+            return False
+        # 检查内容是否为 m3u8 格式
+        text = resp.text.strip()
+        return text.startswith("#")
+    except Exception:
+        return False
+
+
 @app.get("/api/detail")
 async def api_detail(source_name: str, vod_id: int) -> dict:
     client: MacCMSClient = app.state.client
     detail = await client.detail(source_name, vod_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="未找到该剧集")
-    best = detail.best_m3u8_source()
+
+    # 验证播放源可用性（验证第1集链接）
+    httpx_client = client._client
+    valid_sources = []
+    for s in detail.play_sources:
+        if s.episodes and await _validate_source_url(httpx_client, s.episodes[0].url):
+            valid_sources.append(s)
+
+    if not valid_sources:
+        raise HTTPException(status_code=404, detail="该剧集所有播放源均已失效，请换其他剧集")
+
+    best = valid_sources[0]
     return {
         "summary": {
             "source_name": detail.summary.source_name,
@@ -141,10 +182,10 @@ async def api_detail(source_name: str, vod_id: int) -> dict:
             {
                 "flag": s.flag,
                 "is_m3u8": s.is_m3u8,
-                "is_recommended": (best is not None and s is best),
+                "is_recommended": (s is best),
                 "episodes": [{"name": e.name, "url": e.url} for e in s.episodes],
             }
-            for s in detail.play_sources
+            for s in valid_sources
         ],
     }
 

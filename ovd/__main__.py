@@ -9,8 +9,13 @@ from threading import Timer
 
 import uvicorn
 
-from . import __version__
-from .config import Settings
+# PyInstaller 兼容：优先尝试绝对导入
+try:
+    from ovd import __version__
+    from ovd.config import Settings
+except ImportError:
+    from . import __version__
+    from .config import Settings
 
 
 def main() -> None:

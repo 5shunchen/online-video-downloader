@@ -8,7 +8,11 @@ from typing import Iterable
 
 import httpx
 
-from ..config import Settings, Source
+# PyInstaller 兼容：优先绝对导入
+try:
+    from ovd.config import Settings, Source
+except ImportError:
+    from ..config import Settings, Source
 
 
 @dataclass(frozen=True)

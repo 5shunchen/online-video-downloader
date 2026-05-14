@@ -25,7 +25,7 @@
 
 <div class="container">
   <!-- 搜索栏 -->
-  <div class="input-group mb-3">
+  <div id="searchBar" class="input-group mb-3">
     <input id="kw" type="text" class="form-control"
            placeholder="输入关键字, 例如「遮天」" />
     <button id="btnSearch" class="btn btn-primary">🔍 搜索</button>
@@ -35,17 +35,25 @@
   <div id="results" class="row g-3 mb-4"></div>
 
   <!-- 详情 / 分集 -->
-  <div id="detail" class="card mb-4 d-none"></div>
+  <div id="detailSection" class="d-none">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 id="detailTitle"></h5>
+      <button id="btnBack" class="btn btn-outline-secondary">← 返回搜索</button>
+    </div>
+    <div id="detail" class="card mb-4"></div>
+  </div>
 
   <!-- 任务列表 -->
-  <h5>📥 下载任务</h5>
-  <div id="jobs" class="table-responsive">
-    <table class="table table-sm table-hover align-middle">
-      <thead><tr>
-        <th>#</th><th>剧名</th><th>集</th><th>状态</th><th>错误</th><th>输出</th><th>操作</th>
-      </tr></thead>
-      <tbody id="jobsBody"></tbody>
-    </table>
+  <div id="jobsSection">
+    <h5>📥 下载任务</h5>
+    <div id="jobs" class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead><tr>
+          <th>#</th><th>剧名</th><th>集</th><th>状态</th><th>错误</th><th>输出</th><th>操作</th>
+        </tr></thead>
+        <tbody id="jobsBody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -53,9 +61,16 @@
 const $ = (sel) => document.querySelector(sel);
 
 async function api(path, opts = {}) {
+  console.log('API 请求:', path, opts);
   const r = await fetch(path, opts);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+  if (!r.ok) {
+    const err = await r.text();
+    console.error('API 错误:', path, r.status, err);
+    throw new Error(err || '请求失败 ' + r.status);
+  }
+  const data = await r.json();
+  console.log('API 响应:', path, data);
+  return data;
 }
 
 async function loadMeta() {
@@ -93,7 +108,7 @@ async function search() {
               · 源: ${escapeHTML(v.source_name)}
             </p>
             <button class="btn btn-sm btn-outline-primary open-detail-btn"
-                    data-source="${v.source_name}" data-vodid="${v.vod_id}" data-name="${v.name}">
+                    data-source="${escapeHTML(v.source_name)}" data-vodid="${v.vod_id}" data-name="${escapeHTML(v.name)}">
               查看分集
             </button>
           </div>
@@ -106,22 +121,38 @@ async function search() {
 let currentDetail = null; // {videoName, source_name, episodes:[{name,url}], selected:Set<number>}
 
 async function openDetail(sourceName, vodId, fallbackName) {
-  $('#detail').classList.remove('d-none');
+  // 隐藏搜索结果，只显示详情页
+  $('#searchBar').classList.add('d-none');
+  $('#results').classList.add('d-none');
+  $('#jobsSection').classList.add('d-none');
+  $('#detailSection').classList.remove('d-none');
   $('#detail').innerHTML = '<div class="card-body text-muted">加载中…</div>';
-  const d = await api(`/api/detail?source_name=${encodeURIComponent(sourceName)}&vod_id=${vodId}`);
-  const best = d.play_sources.find(s => s.is_recommended) || d.play_sources[0];
-  if (!best) {
-    $('#detail').innerHTML = '<div class="card-body text-danger">没有可用播放源</div>';
-    return;
+  try {
+    const d = await api(`/api/detail?source_name=${encodeURIComponent(sourceName)}&vod_id=${vodId}`);
+    const best = d.play_sources.find(s => s.is_recommended) || d.play_sources[0];
+    if (!best) {
+      $('#detail').innerHTML = '<div class="card-body text-danger">没有可用播放源</div>';
+      return;
+    }
+    currentDetail = {
+      videoName: d.summary.name || fallbackName,
+      sourceName,
+      flag: best.flag,
+      episodes: best.episodes,
+      selected: new Set(),
+    };
+    $('#detailTitle').textContent = `📺 ${currentDetail.videoName}`;
+    renderDetail(d, best);
+  } catch (e) {
+    $('#detail').innerHTML = `<div class="card-body text-danger">加载失败: ${e.message}</div>`;
   }
-  currentDetail = {
-    videoName: d.summary.name || fallbackName,
-    sourceName,
-    flag: best.flag,
-    episodes: best.episodes,
-    selected: new Set(),
-  };
-  renderDetail(d, best);
+}
+
+function backToSearch() {
+  $('#searchBar').classList.remove('d-none');
+  $('#results').classList.remove('d-none');
+  $('#jobsSection').classList.remove('d-none');
+  $('#detailSection').classList.add('d-none');
 }
 
 function renderDetail(d, best) {
@@ -226,6 +257,9 @@ document.addEventListener('click', e => {
     openDetail(btn.dataset.source, parseInt(btn.dataset.vodid), btn.dataset.name);
   }
 });
+
+// 返回搜索按钮
+$('#btnBack').onclick = backToSearch;
 
 loadMeta();
 refreshJobs();

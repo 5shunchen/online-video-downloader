@@ -11,7 +11,6 @@
     .cover { width: 110px; height: 150px; object-fit: cover; border-radius: 6px; }
     .ep-btn { margin: 4px; min-width: 90px; }
     .ep-btn.selected { background: #198754; color: #fff; border-color: #198754; }
-    .job-row code { font-size: 12px; }
     .badge-status { min-width: 84px; }
   </style>
 </head>
@@ -24,246 +23,347 @@
 </nav>
 
 <div class="container">
-  <!-- 搜索栏 -->
-  <div id="searchBar" class="input-group mb-3">
-    <input id="kw" type="text" class="form-control"
-           placeholder="输入关键字, 例如「遮天」" />
-    <button id="btnSearch" class="btn btn-primary">🔍 搜索</button>
+  <!-- 搜索视图 -->
+  <div id="searchView">
+    <div class="input-group mb-3">
+      <input id="kw" type="text" class="form-control"
+             placeholder="输入关键字, 例如「遮天」" />
+      <button id="btnSearch" class="btn btn-primary">🔍 搜索</button>
+    </div>
+    <div id="results" class="row g-3 mb-4"></div>
+    <h5>📥 下载任务</h5>
+    <div class="mb-2">
+      <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(true)">全选</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(false)">全不选</button>
+      <button id="btnDeleteSelected" class="btn btn-sm btn-danger" disabled onclick="deleteSelectedJobs()">删除选中</button>
+      <button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteAllJobs()">清空全部</button>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead><tr>
+          <th style="width: 30px;"></th><th>#</th><th>剧名</th><th>集</th><th>状态</th><th>错误</th><th>输出</th><th>操作</th>
+        </tr></thead>
+        <tbody id="jobsBody"></tbody>
+      </table>
+    </div>
   </div>
 
-  <!-- 搜索结果 -->
-  <div id="results" class="row g-3 mb-4"></div>
-
-  <!-- 详情 / 分集 -->
-  <div id="detailSection" class="d-none">
+  <!-- 详情视图（默认隐藏） -->
+  <div id="detailView" style="display: none;">
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h5 id="detailTitle"></h5>
       <button id="btnBack" class="btn btn-outline-secondary">← 返回搜索</button>
     </div>
-    <div id="detail" class="card mb-4"></div>
-  </div>
-
-  <!-- 任务列表 -->
-  <div id="jobsSection">
+    <div id="detailCard" class="card mb-4">
+      <div class="card-body text-muted">加载中…</div>
+    </div>
     <h5>📥 下载任务</h5>
-    <div id="jobs" class="table-responsive">
+    <div class="mb-2">
+      <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(true)">全选</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(false)">全不选</button>
+      <button id="btnDeleteSelectedDetail" class="btn btn-sm btn-danger" disabled onclick="deleteSelectedJobs()">删除选中</button>
+      <button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteAllJobs()">清空全部</button>
+    </div>
+    <div class="table-responsive">
       <table class="table table-sm table-hover align-middle">
         <thead><tr>
-          <th>#</th><th>剧名</th><th>集</th><th>状态</th><th>错误</th><th>输出</th><th>操作</th>
+          <th style="width: 30px;"></th><th>#</th><th>剧名</th><th>集</th><th>状态</th><th>错误</th><th>输出</th><th>操作</th>
         </tr></thead>
-        <tbody id="jobsBody"></tbody>
+        <tbody id="jobsBodyDetail"></tbody>
       </table>
     </div>
   </div>
 </div>
 
 <script>
-const $ = (sel) => document.querySelector(sel);
+  const $ = (sel) => document.querySelector(sel);
 
-async function api(path, opts = {}) {
-  console.log('API 请求:', path, opts);
-  const r = await fetch(path, opts);
-  if (!r.ok) {
-    const err = await r.text();
-    console.error('API 错误:', path, r.status, err);
-    throw new Error(err || '请求失败 ' + r.status);
+  // 全局状态
+  let currentDetail = null;
+
+  async function api(path, opts = {}) {
+    const r = await fetch(path, opts);
+    if (!r.ok) {
+      const err = await r.text();
+      throw new Error(err || '请求失败 ' + r.status);
+    }
+    return r.json();
   }
-  const data = await r.json();
-  console.log('API 响应:', path, data);
-  return data;
-}
 
-async function loadMeta() {
-  const v = await api('/api/version');
-  $('#meta').textContent =
-    `v${v.version} · 下载至 ${v.download_dir} · 数据源 ${v.sources.map(s=>s.name).join('/')}`;
-}
-
-async function search() {
-  const wd = $('#kw').value.trim();
-  if (!wd) return;
-  $('#results').innerHTML = '<div class="text-muted">搜索中…</div>';
-  $('#detail').classList.add('d-none');
-  const data = await api('/api/search?wd=' + encodeURIComponent(wd));
-  if (!data.items.length) {
-    $('#results').innerHTML =
-      '<div class="alert alert-warning">没有找到结果, 换个关键字试试。</div>';
-    return;
+  function escapeHTML(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])
+    );
   }
-  $('#results').innerHTML = data.items.map((v, i) => `
-    <div class="col-md-6">
-      <div class="card h-100"><div class="row g-0">
-        <div class="col-auto p-2">
-          <img class="cover" src="${v.pic || ''}"
-               onerror="this.style.visibility='hidden'" alt="" />
-        </div>
-        <div class="col">
-          <div class="card-body">
-            <h6 class="card-title mb-1">${escapeHTML(v.name)}
-              <span class="badge bg-secondary ms-1">${escapeHTML(v.remarks||'')}</span>
-            </h6>
-            <p class="small text-muted mb-2">
-              ${escapeHTML(v.year||'')} · ${escapeHTML(v.area||'')}
-              · ${escapeHTML(v.type_name||'')}
-              · 源: ${escapeHTML(v.source_name)}
-            </p>
-            <button class="btn btn-sm btn-outline-primary open-detail-btn"
-                    data-source="${escapeHTML(v.source_name)}" data-vodid="${v.vod_id}" data-name="${escapeHTML(v.name)}">
-              查看分集
-            </button>
-          </div>
-        </div>
-      </div></div>
-    </div>
-  `).join('');
-}
 
-let currentDetail = null; // {videoName, source_name, episodes:[{name,url}], selected:Set<number>}
+  // 切换视图
+  function showView(viewName) {
+    if (viewName === 'search') {
+      $('#searchView').style.display = 'block';
+      $('#detailView').style.display = 'none';
+    } else {
+      $('#searchView').style.display = 'none';
+      $('#detailView').style.display = 'block';
+    }
+  }
 
-async function openDetail(sourceName, vodId, fallbackName) {
-  // 隐藏搜索结果，只显示详情页
-  $('#searchBar').classList.add('d-none');
-  $('#results').classList.add('d-none');
-  $('#jobsSection').classList.add('d-none');
-  $('#detailSection').classList.remove('d-none');
-  $('#detail').innerHTML = '<div class="card-body text-muted">加载中…</div>';
-  try {
-    const d = await api(`/api/detail?source_name=${encodeURIComponent(sourceName)}&vod_id=${vodId}`);
-    const best = d.play_sources.find(s => s.is_recommended) || d.play_sources[0];
-    if (!best) {
-      $('#detail').innerHTML = '<div class="card-body text-danger">没有可用播放源</div>';
+  // 搜索
+  async function search() {
+    const kw = $('#kw').value.trim();
+    if (!kw) return;
+    $('#results').innerHTML = '<div class="text-muted">搜索中…</div>';
+    const data = await api('/api/search?wd=' + encodeURIComponent(kw));
+    if (!data.items.length) {
+      $('#results').innerHTML =
+        '<div class="alert alert-warning">没有找到结果, 换个关键字试试。</div>';
       return;
     }
-    currentDetail = {
-      videoName: d.summary.name || fallbackName,
-      sourceName,
-      flag: best.flag,
-      episodes: best.episodes,
-      selected: new Set(),
-    };
-    $('#detailTitle').textContent = `📺 ${currentDetail.videoName}`;
-    renderDetail(d, best);
-  } catch (e) {
-    $('#detail').innerHTML = `<div class="card-body text-danger">加载失败: ${e.message}</div>`;
-  }
-}
-
-function backToSearch() {
-  $('#searchBar').classList.remove('d-none');
-  $('#results').classList.remove('d-none');
-  $('#jobsSection').classList.remove('d-none');
-  $('#detailSection').classList.add('d-none');
-}
-
-function renderDetail(d, best) {
-  const epsHtml = currentDetail.episodes.map((e, i) => `
-    <button type="button"
-            class="btn btn-sm btn-outline-secondary ep-btn"
-            data-idx="${i}" onclick="toggleEp(${i})">${escapeHTML(e.name)}</button>
-  `).join('');
-  $('#detail').innerHTML = `
-    <div class="card-body">
-      <h5 class="mb-2">${escapeHTML(d.summary.name)} <small class="text-muted">${escapeHTML(d.summary.remarks||'')}</small></h5>
-      <p class="small text-muted">
-        播放源: ${d.play_sources.map(s =>
-          `<span class="badge ${s.is_recommended?'bg-success':'bg-secondary'} me-1">${escapeHTML(s.flag)}${s.is_recommended?' ★':''}</span>`
-        ).join('')}
-        <br/>使用源: <code>${escapeHTML(best.flag)}</code> · 共 ${currentDetail.episodes.length} 集
-      </p>
-      <div class="mb-2">
-        <button class="btn btn-sm btn-light" onclick="selectAll(true)">全选</button>
-        <button class="btn btn-sm btn-light" onclick="selectAll(false)">全不选</button>
-        <button class="btn btn-success btn-sm float-end" onclick="downloadSelected()">⬇️ 下载所选</button>
+    $('#results').innerHTML = data.items.map((v, i) => `
+      <div class="col-md-6">
+        <div class="card h-100"><div class="row g-0">
+          <div class="col-auto p-2">
+            <img class="cover" src="${v.pic || ''}"
+                 onerror="this.style.visibility='hidden'" alt="" />
+          </div>
+          <div class="col">
+            <div class="card-body">
+              <h6 class="card-title mb-1">${escapeHTML(v.name)}
+                <span class="badge bg-secondary ms-1">${escapeHTML(v.remarks||'')}</span>
+                <span class="badge bg-info ms-1">${escapeHTML(v.quality||'高清')}</span>
+              </h6>
+              <p class="small text-muted mb-2">
+                ${escapeHTML(v.year||'')} · ${escapeHTML(v.area||'')}
+                · ${escapeHTML(v.type_name||'')}
+                · 源: ${escapeHTML(v.source_name)}
+              </p>
+              <button class="btn btn-sm btn-outline-primary"
+                      onclick="handleOpenDetail('${v.source_name.replace(/'/g,"\\'")}', ${v.vod_id}, '${v.name.replace(/'/g,"\\'")}')">
+                查看分集
+              </button>
+            </div>
+          </div>
+        </div></div>
       </div>
-      <div id="epsBox">${epsHtml}</div>
-    </div>
-  `;
-}
-
-function toggleEp(i) {
-  const set = currentDetail.selected;
-  if (set.has(i)) set.delete(i); else set.add(i);
-  const btn = document.querySelector(`#epsBox button[data-idx="${i}"]`);
-  if (btn) btn.classList.toggle('selected');
-}
-
-function selectAll(on) {
-  currentDetail.selected.clear();
-  document.querySelectorAll('#epsBox button').forEach((btn, i) => {
-    btn.classList.toggle('selected', !!on);
-    if (on) currentDetail.selected.add(i);
-  });
-}
-
-async function downloadSelected() {
-  if (!currentDetail || !currentDetail.selected.size) {
-    alert('请至少选一集');
-    return;
+    `).join('');
   }
-  const eps = [...currentDetail.selected].sort((a,b)=>a-b)
-    .map(i => currentDetail.episodes[i]);
-  await api('/api/download', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      video_name: currentDetail.videoName,
-      episodes: eps.map(e => ({name: e.name, url: e.url})),
-    }),
-  });
-  await refreshJobs();
-}
 
-async function refreshJobs() {
-  const data = await api('/api/jobs');
-  $('#jobsBody').innerHTML = data.jobs.map(j => {
-    const cls = ({
-      queued:'bg-secondary', downloading:'bg-primary',
-      completed:'bg-success', failed:'bg-danger', canceled:'bg-warning text-dark'
-    })[j.status] || 'bg-secondary';
-    return `
-      <tr class="job-row">
-        <td>${j.id}</td>
-        <td>${escapeHTML(j.video_name)}</td>
-        <td>${escapeHTML(j.episode_name)}</td>
-        <td><span class="badge badge-status ${cls}">${j.status}</span></td>
-        <td><code>${escapeHTML((j.error||'').slice(-120))}</code></td>
-        <td><code>${escapeHTML(j.output_path)}</code></td>
-        <td>${j.status==='queued'
-          ? `<button class="btn btn-sm btn-outline-warning" onclick="cancelJob(${j.id})">取消</button>`
-          : ''}</td>
-      </tr>`;
-  }).join('') || '<tr><td colspan="7" class="text-muted">还没有任务</td></tr>';
-}
+  // 打开详情页
+  async function handleOpenDetail(sourceName, vodId, videoName) {
+    showView('detail');
+    $('#detailTitle').textContent = '📺 加载中...';
+    $('#detailCard').innerHTML = '<div class="card-body text-muted">加载中…</div>';
 
-async function cancelJob(id) {
-  try { await api(`/api/jobs/${id}/cancel`, {method:'POST'}); }
-  catch(e) { alert(e.message); }
-  await refreshJobs();
-}
+    try {
+      const d = await api(`/api/detail?source_name=${encodeURIComponent(sourceName)}&vod_id=${vodId}`);
+      const best = d.play_sources.find(s => s.is_recommended) || d.play_sources[0];
+      if (!best) {
+        $('#detailCard').innerHTML = '<div class="card-body text-danger">没有可用播放源</div>';
+        return;
+      }
 
-function escapeHTML(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])
-  );
-}
+      currentDetail = {
+        videoName: d.summary.name || videoName,
+        sourceName,
+        flag: best.flag,
+        episodes: best.episodes,
+        selected: new Set(),
+      };
 
-$('#btnSearch').onclick = search;
-$('#kw').addEventListener('keyup', e => { if (e.key === 'Enter') search(); });
+      $('#detailTitle').textContent = '📺 ' + currentDetail.videoName;
 
-// 事件委托：处理搜索结果卡片里的"查看分集"按钮
-document.addEventListener('click', e => {
-  const btn = e.target.closest('.open-detail-btn');
-  if (btn) {
-    openDetail(btn.dataset.source, parseInt(btn.dataset.vodid), btn.dataset.name);
+      // 渲染播放源标签
+      let sourceBadges = '';
+      for (let s of d.play_sources) {
+        const cls = s.is_recommended ? 'bg-success' : 'bg-secondary';
+        const star = s.is_recommended ? ' ★' : '';
+        sourceBadges += `<span class="badge ${cls} me-1">${escapeHTML(s.flag)}${star}</span>`;
+      }
+
+      // 渲染分集按钮
+      let epsHtml = '';
+      for (let i = 0; i < currentDetail.episodes.length; i++) {
+        const e = currentDetail.episodes[i];
+        epsHtml += `<button type="button" class="btn btn-sm btn-outline-secondary ep-btn"
+          onclick="toggleEp(${i})">${escapeHTML(e.name)}</button>`;
+      }
+
+      $('#detailCard').innerHTML = `
+        <div class="card-body">
+          <h5 class="mb-2">${escapeHTML(d.summary.name)} <small class="text-muted">${escapeHTML(d.summary.remarks||'')}</small></h5>
+          <p class="small text-muted">
+            播放源: ${sourceBadges}
+            <br/>使用源: <code>${escapeHTML(best.flag)}</code> · 共 ${currentDetail.episodes.length} 集
+          </p>
+          <div class="mb-2">
+            <button class="btn btn-sm btn-light" onclick="selectAll(true)">全选</button>
+            <button class="btn btn-sm btn-light" onclick="selectAll(false)">全不选</button>
+            <button class="btn btn-success btn-sm float-end" onclick="downloadSelected()">⬇️ 下载所选</button>
+          </div>
+          <div id="epsBox">${epsHtml}</div>
+        </div>
+      `;
+
+    } catch (e) {
+      $('#detailCard').innerHTML = `<div class="card-body text-danger">加载失败: ${e.message}</div>`;
+    }
   }
-});
 
-// 返回搜索按钮
-$('#btnBack').onclick = backToSearch;
+  function toggleEp(i) {
+    const set = currentDetail.selected;
+    if (set.has(i)) set.delete(i); else set.add(i);
+    const btn = document.querySelector(`#epsBox button`).parentElement.children[i];
+    if (btn) btn.classList.toggle('selected');
+  }
 
-loadMeta();
-refreshJobs();
-setInterval(refreshJobs, 2000);
+  function selectAll(on) {
+    currentDetail.selected.clear();
+    const btns = document.querySelectorAll('#epsBox button');
+    for (let i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle('selected', !!on);
+      if (on) currentDetail.selected.add(i);
+    }
+  }
+
+  async function downloadSelected() {
+    if (!currentDetail || !currentDetail.selected.size) {
+      alert('请至少选一集');
+      return;
+    }
+    const eps = [...currentDetail.selected].sort((a,b)=>a-b)
+      .map(i => currentDetail.episodes[i]);
+    await api('/api/download', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        video_name: currentDetail.videoName,
+        episodes: eps.map(e => ({name: e.name, url: e.url})),
+      }),
+    });
+    await refreshJobs();
+  }
+
+  async function openFolder(path) {
+    try {
+      await api('/api/open-folder?path=' + encodeURIComponent(path), { method: 'POST' });
+    } catch (e) {
+      alert('打开目录失败: ' + e.message);
+    }
+  }
+
+  async function refreshJobs() {
+    const data = await api('/api/jobs');
+    const html = data.jobs.map(j => {
+      const cls = ({
+        queued:'bg-secondary', downloading:'bg-primary',
+        completed:'bg-success', failed:'bg-danger', canceled:'bg-warning text-dark'
+      })[j.status] || 'bg-secondary';
+
+      // 进度显示
+      let progressHtml = '';
+      if (j.status === 'downloading') {
+        const speedMB = (j.download_speed / 1024 / 1024).toFixed(1);
+        const elapsed = Math.round(j.elapsed_seconds || 0);
+        const min = Math.floor(elapsed / 60);
+        const sec = elapsed % 60;
+        const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
+        progressHtml = `<div class="text-primary small">${j.progress}% · ${speedMB} MB/s · ${timeStr}</div>`;
+      } else if (j.status === 'completed') {
+        const elapsed = Math.round(j.elapsed_seconds || 0);
+        const min = Math.floor(elapsed / 60);
+        const sec = elapsed % 60;
+        const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
+        progressHtml = `<div class="text-success small">✓ ${timeStr}</div>`;
+      }
+
+      const openBtn = j.status === 'completed'
+        ? `<button class="btn btn-sm btn-outline-primary" onclick="openFolder('${j.output_path.replace(/'/g,"\\'")}')">📂 打开</button>`
+        : '';
+      return `
+        <tr>
+          <td><input type="checkbox" class="job-checkbox" data-id="${j.id}" onchange="updateDeleteButtons()"></td>
+          <td>${j.id}</td>
+          <td>${escapeHTML(j.video_name)}</td>
+          <td>${escapeHTML(j.episode_name)}</td>
+          <td>
+            <span class="badge badge-status ${cls}">${j.status}</span>
+            ${progressHtml}
+          </td>
+          <td><code>${escapeHTML((j.error||'').slice(-120))}</code></td>
+          <td><code>${escapeHTML(j.output_path)}</code></td>
+          <td>
+            ${openBtn}
+            <button class="btn btn-sm btn-outline-danger ms-1" onclick="deleteJob(${j.id})">🗑️</button>
+          </td>
+        </tr>`;
+    }).join('') || '<tr><td colspan="8" class="text-muted">还没有任务</td></tr>';
+
+    $('#jobsBody').innerHTML = html;
+    $('#jobsBodyDetail').innerHTML = html;
+  }
+
+  // 绑定事件
+  $('#btnSearch').onclick = search;
+  $('#kw').addEventListener('keyup', e => { if (e.key === 'Enter') search(); });
+  $('#btnBack').onclick = () => showView('search');
+
+  // 初始化
+  api('/api/version').then(v => {
+    $('#meta').textContent =
+      `v${v.version} · 下载至 ${v.download_dir} · 数据源 ${v.sources.map(s=>s.name).join('/')}`;
+  });
+  refreshJobs();
+  setInterval(refreshJobs, 2000);
+
+  // 删除功能
+  async function deleteJob(jobId) {
+    if (!confirm('确定要删除这条下载记录吗？（不会删除已下载的文件）')) return;
+    await api(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    await refreshJobs();
+  }
+
+  async function deleteSelectedJobs() {
+    const checked = document.querySelectorAll('.job-checkbox:checked');
+    if (checked.length === 0) return;
+    if (!confirm(`确定要删除选中的 ${checked.length} 条记录吗？（不会删除已下载的文件）`)) return;
+    const ids = Array.from(checked).map(cb => parseInt(cb.dataset.id));
+    await api('/api/jobs/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    await refreshJobs();
+  }
+
+  async function deleteAllJobs() {
+    if (!confirm('确定要清空所有下载记录吗？（不会删除已下载的文件）')) return;
+    await api('/api/jobs/delete', { method: 'POST' });
+    await refreshJobs();
+  }
+
+  function selectAllJobs(on) {
+    document.querySelectorAll('.job-checkbox').forEach(cb => cb.checked = on);
+    updateDeleteButtons();
+  }
+
+  function updateDeleteButtons() {
+    const checked = document.querySelectorAll('.job-checkbox:checked').length;
+    const btn = $('#btnDeleteSelected');
+    if (btn) btn.disabled = checked === 0;
+    const btnDetail = $('#btnDeleteSelectedDetail');
+    if (btnDetail) btnDetail.disabled = checked === 0;
+  }
+
+  // 暴露全局函数
+  window.handleOpenDetail = handleOpenDetail;
+  window.toggleEp = toggleEp;
+  window.selectAll = selectAll;
+  window.downloadSelected = downloadSelected;
+  window.openFolder = openFolder;
+  window.deleteJob = deleteJob;
+  window.deleteSelectedJobs = deleteSelectedJobs;
+  window.deleteAllJobs = deleteAllJobs;
+  window.selectAllJobs = selectAllJobs;
+  window.updateDeleteButtons = updateDeleteButtons;
 </script>
 </body>
 </html>

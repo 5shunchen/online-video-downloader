@@ -102,10 +102,21 @@ async def api_search(wd: str) -> dict:
                 "year": v.year,
                 "area": v.area,
                 "type_name": v.type_name,
+                "quality": _detect_quality(v),
             }
             for v in items
         ],
     }
+
+
+def _detect_quality(v) -> str:
+    """根据源信息推断画质"""
+    text = (v.source_name + v.remarks + v.type_name).lower()
+    if any(k in text for k in ['1080', '1080p', '蓝光', 'bluray', '4k', '超清']):
+        return '1080P'
+    if any(k in text for k in ['720', '720p', '高清']):
+        return '720P'
+    return '高清'
 
 
 @app.get("/api/detail")
@@ -148,6 +159,28 @@ async def api_download(payload: DownloadIn) -> dict:
     return {"queued": len(jobs), "jobs": [j.to_dict() for j in jobs]}
 
 
+import subprocess
+from pathlib import Path
+
+@app.post("/api/open-folder")
+async def api_open_folder(path: str) -> dict:
+    """打开文件所在目录"""
+    try:
+        p = Path(path).parent
+        if p.exists():
+            import platform
+            if platform.system() == 'Windows':
+                subprocess.run(['explorer', str(p)], check=True)
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.run(['open', str(p)], check=True)
+            else:  # Linux
+                subprocess.run(['xdg-open', str(p)], check=True)
+            return {"success": True, "path": str(p)}
+        return {"success": False, "error": "目录不存在"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/jobs")
 async def api_jobs() -> dict:
     manager: JobManager = app.state.manager
@@ -159,7 +192,34 @@ async def api_cancel(job_id: int) -> dict:
     manager: JobManager = app.state.manager
     ok = manager.cancel(job_id)
     if not ok:
-        raise HTTPException(
-            status_code=400, detail="只能取消尚未开始的队列任务"
-        )
+        raise HTTPException(status_code=400, detail="只能取消尚未开始的队列任务")
     return {"id": job_id, "status": "canceled"}
+
+
+@app.delete("/api/jobs/{job_id}")
+async def api_delete_job(job_id: int) -> dict:
+    """删除单个下载记录（不删除文件）"""
+    manager: JobManager = app.state.manager
+    ok = manager.delete_job(job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"id": job_id, "status": "deleted"}
+
+
+from pydantic import BaseModel
+class DeleteJobsRequest(BaseModel):
+    ids: list[int] | None = None  # None = 删除全部
+
+
+@app.post("/api/jobs/delete")
+async def api_delete_jobs(req: DeleteJobsRequest | None = None) -> dict:
+    """批量删除下载记录（不删除文件），ids=None 表示删除全部"""
+    manager: JobManager = app.state.manager
+    if req is None or req.ids is None:
+        count = manager.delete_all_jobs()
+        return {"deleted_count": count, "action": "all"}
+    count = 0
+    for job_id in req.ids:
+        if manager.delete_job(job_id):
+            count += 1
+    return {"deleted_count": count, "ids": req.ids}

@@ -61,8 +61,19 @@ class DownloadJob:
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
+    # 下载进度
+    total_chunks: int = 0
+    downloaded_chunks: int = 0
+    bytes_downloaded: int = 0
+    download_speed: float = 0.0  # bytes/sec
 
     def to_dict(self) -> dict:
+        elapsed = None
+        if self.started_at:
+            elapsed = (self.finished_at or time.time()) - self.started_at
+        progress = 0
+        if self.total_chunks > 0:
+            progress = int(self.downloaded_chunks * 100 / self.total_chunks)
         return {
             "id": self.id,
             "video_name": self.video_name,
@@ -74,6 +85,10 @@ class DownloadJob:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "progress": progress,
+            "download_speed": self.download_speed,
+            "bytes_downloaded": self.bytes_downloaded,
+            "elapsed_seconds": elapsed,
         }
 
 
@@ -155,6 +170,19 @@ class JobManager:
         job.finished_at = time.time()
         return True
 
+    def delete_job(self, job_id: int) -> bool:
+        """删除单个下载记录（不删除文件，仅从列表移除）"""
+        if job_id in self._jobs:
+            del self._jobs[job_id]
+            return True
+        return False
+
+    def delete_all_jobs(self) -> int:
+        """删除所有下载记录（不删除文件）"""
+        count = len(self._jobs)
+        self._jobs.clear()
+        return count
+
     # --- 内部 worker ------------------------------------------------
 
     async def _worker(self) -> None:
@@ -204,6 +232,7 @@ class JobManager:
         )
         job.output_path.parent.mkdir(parents=True, exist_ok=True)
         tmpdir = Path(tempfile.mkdtemp(dir=str(job.output_path.parent), prefix=".ovd_"))
+        start_time = time.time()
         try:
             # 1) 解析 m3u8, 获取 TS 列表与加密密钥
             master = (await client.get(job.url)).text
@@ -211,10 +240,16 @@ class JobManager:
             if not ts_urls:
                 raise ValueError("未找到任何 ts 分片, m3u8 可能无效")
 
+            # 初始化进度
+            job.total_chunks = len(ts_urls)
+            job.downloaded_chunks = 0
+            job.bytes_downloaded = 0
+            last_speed_update = start_time
+
             # 2) 并行下载 + 解密 TS
             sem = asyncio.Semaphore(8)
             tasks = [
-                self._dl_one_ts(client, sem, tmpdir, i, url, key_data, iv)
+                self._dl_one_ts(client, sem, tmpdir, i, url, key_data, iv, job)
                 for i, url in enumerate(ts_urls)
             ]
             await asyncio.gather(*tasks)
@@ -261,6 +296,7 @@ class JobManager:
         url: str,
         key_data: bytes | None,
         iv: bytes | None,
+        job: DownloadJob,
     ) -> None:
         """下载单个 TS, AES 解密后写入, 最多重试 3 次。"""
         for retry in range(3):
@@ -269,6 +305,13 @@ class JobManager:
                     resp = await client.get(url)
                     resp.raise_for_status()
                     data = resp.content
+
+                    # 更新进度
+                    job.bytes_downloaded += len(data)
+                    job.downloaded_chunks += 1
+                    elapsed = time.time() - (job.started_at or time.time())
+                    if elapsed > 0:
+                        job.download_speed = job.bytes_downloaded / elapsed
 
                     if key_data is not None:
                         # AES-128-CBC 解密

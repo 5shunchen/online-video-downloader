@@ -16,9 +16,11 @@ class Source:
 
 
 # 默认数据源 (MacCMS V10 标准接口, 与 7080.wang 同类资源)
+# 按稳定性排序，推荐优先使用靠前的源
 DEFAULT_SOURCES: tuple[Source, ...] = (
     Source(name="光速资源", api="https://api.guangsuapi.com/api.php/provide/vod"),
     Source(name="量子资源", api="https://cj.lziapi.com/api.php/provide/vod"),
+    Source(name="暴风云资源", api="https://bfzyapi.com/api.php/provide/vod"),
 )
 
 

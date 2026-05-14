@@ -30,6 +30,31 @@ except ImportError:
 from ..config import Settings
 
 
+# --- ffmpeg 路径检测（支持 PyInstaller 打包） ---
+import os
+import sys
+
+
+def _find_ffmpeg() -> str:
+    """查找 ffmpeg 可执行文件, 支持 PyInstaller 打包的内置版本。"""
+    # 1. 检查 PyInstaller 临时目录
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        ffmpeg_exe = Path(sys._MEIPASS) / 'ffmpeg.exe'
+        if ffmpeg_exe.exists():
+            return str(ffmpeg_exe)
+
+    # 2. 检查同级目录（开发环境）
+    local_ffmpeg = Path(sys.executable).parent / 'ffmpeg.exe'
+    if local_ffmpeg.exists():
+        return str(local_ffmpeg)
+
+    # 3. 使用系统 PATH
+    return 'ffmpeg'
+
+
+FFMPEG_PATH = _find_ffmpeg()
+
+
 # Windows / 跨平台都不允许出现的字符
 _BAD = re.compile(r'[\\/:*?"<>|\r\n\t]')
 
@@ -235,8 +260,13 @@ class JobManager:
         start_time = time.time()
         try:
             # 1) 解析 m3u8, 获取 TS 列表与加密密钥
-            master = (await client.get(job.url)).text
-            ts_urls, key_data, iv = await _parse_m3u8(client, job.url, master)
+            resp = await client.get(job.url)
+            if resp.status_code != 200:
+                raise ValueError(f"播放链接无效 (HTTP {resp.status_code})，请换其他数据源或剧集")
+            content_type = resp.headers.get("content-type", "")
+            if "html" in content_type.lower() or not resp.text.strip().startswith("#"):
+                raise ValueError("该播放链接已失效，请换其他数据源或剧集")
+            ts_urls, key_data, iv = await _parse_m3u8(client, job.url, resp.text)
             if not ts_urls:
                 raise ValueError("未找到任何 ts 分片, m3u8 可能无效")
 
@@ -244,7 +274,6 @@ class JobManager:
             job.total_chunks = len(ts_urls)
             job.downloaded_chunks = 0
             job.bytes_downloaded = 0
-            last_speed_update = start_time
 
             # 2) 并行下载 + 解密 TS
             sem = asyncio.Semaphore(8)
@@ -262,7 +291,7 @@ class JobManager:
                     outf.write(ts.read_bytes())
 
             proc = await asyncio.create_subprocess_exec(
-                "ffmpeg",
+                FFMPEG_PATH,
                 "-hide_banner",
                 "-loglevel",
                 "error",

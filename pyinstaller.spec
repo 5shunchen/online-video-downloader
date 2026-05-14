@@ -1,12 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
-from PyInstaller.utils.hooks import collect_data_files
+import sys
+from pathlib import Path
 
-# 收集所有静态文件
-datas = collect_data_files('ovd')
-datas += [
-    ('ovd/static/index.html', 'ovd/static'),
+# 项目根目录
+ROOT = Path(os.path.abspath(os.path.dirname(__file__)))
+
+# 手动收集静态文件
+datas = [
+    (str(ROOT / 'ovd' / 'static' / 'index.html'), 'ovd/static'),
 ]
 
 # 添加 ffmpeg (Windows 版本会在打包时下载)
@@ -15,8 +18,8 @@ if ffmpeg_path and os.path.exists(ffmpeg_path):
     datas.append((ffmpeg_path, '.'))
 
 a = Analysis(
-    ['ovd/__main__.py'],
-    pathex=[],
+    [str(ROOT / 'ovd' / '__main__.py')],
+    pathex=[str(ROOT)],
     binaries=[],
     datas=datas,
     hiddenimports=[
@@ -31,6 +34,9 @@ a = Analysis(
         'fastapi.responses',
         'httpx',
         'cryptography',
+        'ovd.web.app',
+        'ovd.config',
+        'ovd.downloader.jobs',
     ],
     hookspath=[],
     hooksconfig={},

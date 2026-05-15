@@ -224,15 +224,24 @@ async def api_open_folder(path: str) -> dict:
                 is_wsl = True
 
         if system == 'Windows':
-            # 原生 Windows - 使用 os.startfile 最可靠，支持中文路径
+            # 原生 Windows - 使用 PowerShell 最可靠，完美处理中文和空格
+            abs_path = str(p.absolute())
             try:
-                os.startfile(str(p))
-                return {"success": True, "path": str(p)}
+                # 方法1：使用 PowerShell Invoke-Item - 最可靠的方式
+                subprocess.run(
+                    ['powershell.exe', '-Command', f'Invoke-Item "{abs_path}"'],
+                    shell=False,
+                    timeout=5
+                )
+                return {"success": True, "path": abs_path}
             except Exception:
-                # 备选方案：使用 cmd /c start
+                # 方法2：使用 explorer.exe /select,
                 try:
-                    os.system(f'cmd /c start "" "{p.absolute()}"')
-                    return {"success": True, "path": str(p.absolute())}
+                    subprocess.run(
+                        ['explorer.exe', f'/select,{abs_path}'],
+                        shell=False
+                    )
+                    return {"success": True, "path": abs_path}
                 except Exception as e2:
                     return {"success": False, "error": str(e2)}
         elif is_wsl:

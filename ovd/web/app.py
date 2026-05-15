@@ -208,16 +208,35 @@ async def api_open_folder(path: str) -> dict:
     """打开文件所在目录"""
     try:
         p = Path(path).parent
-        if p.exists():
-            import platform
-            if platform.system() == 'Windows':
-                subprocess.run(['explorer', str(p)], check=True)
-            elif platform.system() == 'Darwin':  # macOS
-                subprocess.run(['open', str(p)], check=True)
-            else:  # Linux
-                subprocess.run(['xdg-open', str(p)], check=True)
-            return {"success": True, "path": str(p)}
-        return {"success": False, "error": "目录不存在"}
+        if not p.exists():
+            return {"success": False, "error": "目录不存在"}
+
+        import platform
+        system = platform.system()
+
+        # 检测 WSL 环境 (Linux 但包含 /mnt/c/ 风格路径或存在 /proc/sys/fs/binfmt_misc/WSLInterop)
+        is_wsl = False
+        if system == 'Linux':
+            wsl_marker = Path('/proc/sys/fs/binfmt_misc/WSLInterop')
+            if wsl_marker.exists() or str(p).startswith('/mnt/'):
+                is_wsl = True
+
+        if system == 'Windows' or is_wsl:
+            # Windows 或 WSL 用 explorer.exe 打开
+            explorer_path = 'explorer.exe' if is_wsl else 'explorer'
+            # 将 WSL 路径转为 Windows 可识别的路径格式
+            win_path = str(p)
+            if is_wsl and win_path.startswith('/mnt/'):
+                # /mnt/c/xxx -> C:\xxx
+                drive = win_path[5]
+                win_path = drive.upper() + ':' + win_path[6:]
+                win_path = win_path.replace('/', '\\')
+            subprocess.run([explorer_path, win_path], check=True)
+        elif system == 'Darwin':  # macOS
+            subprocess.run(['open', str(p)], check=True)
+        else:  # Linux
+            subprocess.run(['xdg-open', str(p)], check=True)
+        return {"success": True, "path": str(p)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

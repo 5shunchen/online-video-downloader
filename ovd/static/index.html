@@ -300,13 +300,36 @@
 
   async function openFolder(path) {
     try {
-      await api('/api/open-folder?path=' + encodeURIComponent(path), { method: 'POST' });
+      const result = await api('/api/open-folder?path=' + encodeURIComponent(path), { method: 'POST' });
+      if (!result.success) {
+        alert('目录路径: ' + path + '\n\n自动打开失败，请手动打开上述目录');
+      }
     } catch (e) {
-      alert('打开目录失败: ' + e.message);
+      const dir = path.substring(0, path.lastIndexOf('/') || path.lastIndexOf('\\'));
+      alert('目录路径: ' + dir + '\n\n自动打开失败，请手动打开上述目录');
     }
   }
 
+  // 保存勾选的任务ID
+  let selectedJobIds = new Set();
+
+  function saveCheckedState() {
+    document.querySelectorAll('.job-checkbox:checked').forEach(cb => {
+      selectedJobIds.add(parseInt(cb.dataset.id));
+    });
+  }
+
+  function restoreCheckedState() {
+    document.querySelectorAll('.job-checkbox').forEach(cb => {
+      cb.checked = selectedJobIds.has(parseInt(cb.dataset.id));
+    });
+    updateDeleteButtons();
+  }
+
   async function refreshJobs() {
+    // 刷新前保存勾选状态
+    saveCheckedState();
+
     const data = await api('/api/jobs');
     // 统计队列状态
     const stats = {
@@ -402,6 +425,9 @@
 
     $('#jobsBody').innerHTML = html;
     $('#jobsBodyDetail').innerHTML = html;
+
+    // 刷新后恢复勾选状态
+    restoreCheckedState();
   }
 
   // 绑定事件

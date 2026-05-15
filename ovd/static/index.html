@@ -36,7 +36,7 @@
     <div id="results" class="row g-3 mb-4"></div>
     <h5>📥 下载任务</h5>
     <div class="alert alert-info py-2 mb-2" id="downloadStatus">
-      📥 下载中: <strong>0/3</strong> | ⏳ 排队中: 0 | ✅ 完成: 0 | ❌ 失败: 0
+      📥 下载中: <strong>0/2</strong> | ⏳ 排队中: 0 | ✅ 完成: 0 | ❌ 失败: 0
     </div>
     <div class="mb-2">
       <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(true)">全选</button>
@@ -65,7 +65,7 @@
     </div>
     <h5>📥 下载任务</h5>
     <div class="alert alert-info py-2 mb-2" id="downloadStatus">
-      📥 下载中: <strong>0/3</strong> | ⏳ 排队中: 0 | ✅ 完成: 0 | ❌ 失败: 0
+      📥 下载中: <strong>0/2</strong> | ⏳ 排队中: 0 | ✅ 完成: 0 | ❌ 失败: 0
     </div>
     <div class="mb-2">
       <button class="btn btn-sm btn-outline-secondary" onclick="selectAllJobs(true)">全选</button>
@@ -318,7 +318,7 @@
     // 更新状态栏
     const statusEl = document.getElementById('downloadStatus');
     if (statusEl) {
-      statusEl.innerHTML = `📥 下载中: <strong>${stats.downloading}/3</strong> | ⏳ 排队中: ${stats.queued} | ✅ 完成: ${stats.completed} | ❌ 失败: ${stats.failed}`;
+      statusEl.innerHTML = `📥 下载中: <strong>${stats.downloading}/1</strong> | ⏳ 排队中: ${stats.queued} | ✅ 完成: ${stats.completed} | ❌ 失败: ${stats.failed}`;
     }
     const html = data.jobs.map(j => {
       const cls = ({
@@ -330,17 +330,52 @@
       let progressHtml = '';
       if (j.status === 'downloading') {
         const speedMB = (j.download_speed / 1024 / 1024).toFixed(1);
+        const speedDisplay = speedMB >= 1 ? `${speedMB} MB/s` : `${(j.download_speed / 1024).toFixed(0)} KB/s`;
+
         const elapsed = Math.round(j.elapsed_seconds || 0);
         const min = Math.floor(elapsed / 60);
         const sec = elapsed % 60;
         const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
-        progressHtml = `<div class="text-primary small">${j.progress}% · ${speedMB} MB/s · ${timeStr}</div>`;
+
+        // 估算剩余时间
+        let etaStr = '';
+        if (j.progress > 0 && j.progress < 100) {
+          const totalSeconds = elapsed * 100 / j.progress;
+          const remainingSeconds = Math.round(totalSeconds - elapsed);
+          const etaMin = Math.floor(remainingSeconds / 60);
+          const etaSec = remainingSeconds % 60;
+          etaStr = etaMin > 0 ? `ETA: ${etaMin}m${etaSec}s` : `ETA: ${etaSec}s`;
+        }
+
+        // 进度条样式
+        const progressBar = `
+          <div class="progress" style="height: 6px; margin-top: 4px;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                 style="width: ${j.progress}%" role="progressbar">
+            </div>
+          </div>
+        `;
+
+        progressHtml = `
+          <div>
+            <span class="text-primary fw-bold">${j.progress}%</span>
+            <span class="text-muted small ms-2">${speedDisplay}</span>
+            <span class="text-muted small ms-2">${timeStr}</span>
+            ${etaStr ? `<span class="text-warning small ms-2">${etaStr}</span>` : ''}
+            ${progressBar}
+          </div>
+        `;
       } else if (j.status === 'completed') {
         const elapsed = Math.round(j.elapsed_seconds || 0);
         const min = Math.floor(elapsed / 60);
         const sec = elapsed % 60;
         const timeStr = min > 0 ? `${min}m${sec}s` : `${sec}s`;
-        progressHtml = `<div class="text-success small">✓ ${timeStr}</div>`;
+        const sizeMB = (j.bytes_downloaded / 1024 / 1024).toFixed(1);
+        progressHtml = `
+          <div class="text-success small">
+            ✓ 完成 · ${timeStr} · ${sizeMB} MB
+          </div>
+        `;
       }
 
       const openBtn = j.status === 'completed'

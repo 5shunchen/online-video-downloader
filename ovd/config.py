@@ -28,7 +28,7 @@ DEFAULT_SOURCES: tuple[Source, ...] = (
 class Settings:
     download_dir: Path
     sources: tuple[Source, ...] = field(default_factory=lambda: DEFAULT_SOURCES)
-    concurrency: int = 3  # 同时下载集数 (每集内部 8 并发拉 TS)
+    concurrency: int = 1  # 同时下载集数 (每集内部 12 并发拉 TS)
     request_timeout: float = 15.0
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

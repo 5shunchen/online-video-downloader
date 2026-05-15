@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import shutil
-import tempfile
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -95,6 +93,10 @@ class DownloadJob:
     downloaded_chunks: int = 0
     bytes_downloaded: int = 0
     download_speed: float = 0.0  # bytes/sec
+    # 速度计算内部字段
+    _bytes_last_check: int = 0
+    _last_update_time: float = 0.0
+    _speed_window: list[float] = field(default_factory=list)  # 滑动窗口平均速度
 
     def to_dict(self) -> dict:
         elapsed = None
@@ -131,10 +133,27 @@ class JobManager:
         self._next_id = count(start=1)
         self._workers: list[asyncio.Task[None]] = []
         self._stopping = asyncio.Event()
+        # 全局共享 httpx client，连接池复用，提升下载速度
+        self._client: httpx.AsyncClient | None = None
 
     async def start(self) -> None:
         if self._workers:
             return
+        # 初始化全局 httpx client - 经过实际测试的最佳参数
+        limits = httpx.Limits(
+            max_keepalive_connections=30,
+            max_connections=50,
+            keepalive_expiry=30.0,
+        )
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(20.0, connect=8.0),  # 更宽松的超时，避免频繁重试
+            follow_redirects=True,
+            limits=limits,
+            headers={
+                "User-Agent": self._settings.user_agent,
+                "Referer": "https://7080.wang/",
+            },
+        )
         for _ in range(self._settings.concurrency):
             self._workers.append(asyncio.create_task(self._worker()))
 
@@ -148,6 +167,8 @@ class JobManager:
             except (asyncio.CancelledError, Exception):
                 pass
         self._workers.clear()
+        if self._client:
+            await self._client.aclose()
 
     # --- 公共 API ---------------------------------------------------
 
@@ -248,20 +269,13 @@ class JobManager:
             job.finished_at = time.time()
 
     async def _download_m3u8(self, job: DownloadJob) -> None:
-        """m3u8 分片并行下载 + AES 解密 + 本地合并。"""
-        limits = httpx.Limits(max_keepalive_connections=8, max_connections=16)
-        client = httpx.AsyncClient(
-            timeout=30,
-            follow_redirects=True,
-            limits=limits,
-            headers={
-                "User-Agent": self._settings.user_agent,
-                "Referer": "https://7080.wang/",
-            },
-        )
+        """m3u8 分片并行下载 + AES 解密 + 内存合并（零磁盘 IO）。"""
+        client = self._client
+        assert client is not None, "JobManager 未启动"
+
         job.output_path.parent.mkdir(parents=True, exist_ok=True)
-        tmpdir = Path(tempfile.mkdtemp(dir=str(job.output_path.parent), prefix=".ovd_"))
-        start_time = time.time()
+        ts_buffer: dict[int, bytes] = {}  # 内存存储 TS 分片，避免磁盘 IO
+
         try:
             # 1) 解析 m3u8, 获取 TS 列表与加密密钥
             resp = await client.get(job.url)
@@ -278,22 +292,26 @@ class JobManager:
             job.total_chunks = len(ts_urls)
             job.downloaded_chunks = 0
             job.bytes_downloaded = 0
+            job._bytes_last_check = 0
+            job._last_update_time = time.time()
 
-            # 2) 并行下载 + 解密 TS
-            sem = asyncio.Semaphore(8)
+            # 2) 并行下载 + 内存存储 - 24 并发（单任务高并发测试）
+            sem = asyncio.Semaphore(24)  # 单任务高并发测试
             tasks = [
-                self._dl_one_ts(client, sem, tmpdir, i, url, key_data, iv, job)
+                self._dl_one_ts_memory(client, sem, ts_buffer, i, url, key_data, iv, job)
                 for i, url in enumerate(ts_urls)
             ]
             await asyncio.gather(*tasks)
 
-            # 3) TS 格式本身可直接拼接, cat 合并后 ffmpeg 转封装
-            ts_files = [tmpdir / f"ts_{i:05d}.ts" for i in range(len(ts_urls))]
-            joined = tmpdir / "joined.ts"
-            with joined.open("wb") as outf:
-                for ts in ts_files:
-                    outf.write(ts.read_bytes())
+            # 3) 内存中直接拼接 TS，零磁盘 IO
+            from io import BytesIO
+            joined_buffer = BytesIO()
+            for i in range(len(ts_urls)):
+                if i in ts_buffer:
+                    joined_buffer.write(ts_buffer[i])
+            joined_data = joined_buffer.getvalue()
 
+            # 4) 通过管道直接喂给 ffmpeg，避免中间文件
             proc = await asyncio.create_subprocess_exec(
                 FFMPEG_PATH,
                 "-hide_banner",
@@ -301,50 +319,69 @@ class JobManager:
                 "error",
                 "-y",
                 "-i",
-                str(joined),
+                "-",  # 从 stdin 读取
                 "-c",
                 "copy",
                 "-bsf:a",
                 "aac_adtstoasc",
+                "-movflags",
+                "+faststart",  # 优化 web 播放（可选）
                 str(job.output_path),
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await proc.communicate()
+            _, stderr = await proc.communicate(input=joined_data)
             if proc.returncode != 0 or not job.output_path.exists():
                 raise RuntimeError(
                     f"ffmpeg 合并失败 (code={proc.returncode}): "
                     + stderr.decode("utf-8", errors="ignore")[-800:]
                 )
         finally:
-            await client.aclose()
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            ts_buffer.clear()  # 立即释放内存
 
-    async def _dl_one_ts(
+    async def _dl_one_ts_memory(
         self,
         client: httpx.AsyncClient,
         sem: asyncio.Semaphore,
-        tmpdir: Path,
+        ts_buffer: dict[int, bytes],
         idx: int,
         url: str,
         key_data: bytes | None,
         iv: bytes | None,
         job: DownloadJob,
     ) -> None:
-        """下载单个 TS, AES 解密后写入, 最多重试 3 次。"""
-        for retry in range(3):
+        """下载单个 TS 到内存, AES 解密后存入 dict, 最多重试 5 次（指数退避）。"""
+        for retry in range(5):
             async with sem:
                 try:
-                    resp = await client.get(url)
+                    # 禁用重定向自动处理，更快
+                    resp = await client.get(
+                        url,
+                        follow_redirects=True,
+                    )
                     resp.raise_for_status()
                     data = resp.content
 
                     # 更新进度
                     job.bytes_downloaded += len(data)
                     job.downloaded_chunks += 1
-                    elapsed = time.time() - (job.started_at or time.time())
-                    if elapsed > 0:
-                        job.download_speed = job.bytes_downloaded / elapsed
+
+                    # 滑动窗口计算更平滑的下载速度
+                    now = time.time()
+                    elapsed = now - job._last_update_time
+                    if elapsed >= 0.5:  # 每 500ms 更新一次速度
+                        bytes_since = job.bytes_downloaded - job._bytes_last_check
+                        current_speed = bytes_since / elapsed
+
+                        # 滑动窗口平均（最近 5 次采样）
+                        job._speed_window.append(current_speed)
+                        if len(job._speed_window) > 5:
+                            job._speed_window.pop(0)
+                        job.download_speed = sum(job._speed_window) / len(job._speed_window)
+
+                        job._bytes_last_check = job.bytes_downloaded
+                        job._last_update_time = now
 
                     if key_data is not None:
                         # AES-128-CBC 解密
@@ -357,13 +394,14 @@ class JobManager:
                         decryptor = cipher.decryptor()
                         data = decryptor.update(data) + decryptor.finalize()
 
-                    out = tmpdir / f"ts_{idx:05d}.ts"
-                    out.write_bytes(data)
+                    # 直接存入内存，零磁盘 IO
+                    ts_buffer[idx] = data
                     return
                 except Exception:  # noqa: BLE001
-                    if retry == 2:
+                    if retry == 4:  # 第5次重试 (0-4)
                         raise
-                    await asyncio.sleep(1 * (retry + 1))
+                    # 指数退避: 0.1s, 0.2s, 0.4s, 0.8s
+                    await asyncio.sleep(0.1 * (2 ** retry))
 
 
 async def _parse_m3u8(

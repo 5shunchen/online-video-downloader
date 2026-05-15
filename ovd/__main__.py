@@ -39,10 +39,11 @@ def main() -> None:
     # 触发一次配置加载, 让用户尽早看到下载目录。
     settings = Settings.load()
     print(f"[ovd {__version__}] 下载目录: {settings.download_dir}")
-    print(f"[ovd {__version__}] 访问 http://{args.host}:{args.port}")
+    print(f"[ovd {__version__}] 访问 http://127.0.0.1:{args.port}")
 
     if not args.no_browser:
-        Timer(1.0, lambda: webbrowser.open(f"http://{args.host}:{args.port}")).start()
+        # 浏览器总是用 127.0.0.1 访问，即使监听的是 0.0.0.0
+        Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{args.port}")).start()
 
     uvicorn.run("ovd.web.app:app", host=args.host, port=args.port, log_level="info")
 

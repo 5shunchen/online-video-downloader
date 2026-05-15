@@ -302,11 +302,26 @@
     try {
       const result = await api('/api/open-folder?path=' + encodeURIComponent(path), { method: 'POST' });
       if (!result.success) {
-        alert('目录路径: ' + path + '\n\n自动打开失败，请手动打开上述目录');
+        // 计算目录路径
+        const lastSep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+        const dir = lastSep > 0 ? path.substring(0, lastSep) : path;
+        // 尝试复制到剪贴板
+        try {
+          await navigator.clipboard.writeText(dir);
+          alert('目录路径已复制到剪贴板:\n' + dir + '\n\n请手动粘贴到文件资源管理器地址栏');
+        } catch (clipErr) {
+          alert('目录路径:\n' + dir + '\n\n自动打开失败，请手动打开上述目录');
+        }
       }
     } catch (e) {
-      const dir = path.substring(0, path.lastIndexOf('/') || path.lastIndexOf('\\'));
-      alert('目录路径: ' + dir + '\n\n自动打开失败，请手动打开上述目录');
+      const lastSep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+      const dir = lastSep > 0 ? path.substring(0, lastSep) : path;
+      try {
+        await navigator.clipboard.writeText(dir);
+        alert('目录路径已复制到剪贴板:\n' + dir + '\n\n请手动粘贴到文件资源管理器地址栏');
+      } catch (clipErr) {
+        alert('目录路径:\n' + dir + '\n\n自动打开失败，请手动打开上述目录');
+      }
     }
   }
 

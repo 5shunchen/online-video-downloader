@@ -207,11 +207,13 @@ from pathlib import Path
 async def api_open_folder(path: str) -> dict:
     """打开文件所在目录"""
     try:
+        import os
+        import platform
+
         p = Path(path).parent
         if not p.exists():
             return {"success": False, "error": "目录不存在"}
 
-        import platform
         system = platform.system()
 
         # 检测 WSL 环境
@@ -221,40 +223,53 @@ async def api_open_folder(path: str) -> dict:
             if wsl_marker.exists() or str(p).startswith('/mnt/'):
                 is_wsl = True
 
-        # 转换路径为 Windows 格式
-        win_path = str(p)
-        if is_wsl and win_path.startswith('/mnt/'):
-            # /mnt/c/xxx -> C:\xxx
-            drive = win_path[5]
-            win_path = drive.upper() + ':' + win_path[6:]
-            win_path = win_path.replace('/', '\\')
-        elif system == 'Windows':
-            win_path = str(p.absolute())
-
         if system == 'Windows':
-            # 原生 Windows
-            subprocess.run(['explorer', win_path], shell=True)
-            return {"success": True, "path": win_path}
+            # 原生 Windows - 使用 os.startfile 最可靠，支持中文路径
+            try:
+                os.startfile(str(p))
+                return {"success": True, "path": str(p)}
+            except Exception:
+                # 备选方案：使用 cmd /c start
+                try:
+                    os.system(f'cmd /c start "" "{p.absolute()}"')
+                    return {"success": True, "path": str(p.absolute())}
+                except Exception as e2:
+                    return {"success": False, "error": str(e2)}
         elif is_wsl:
-            # WSL 环境通过 PowerShell 调用 explorer
-            ps_paths = [
-                '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',
-                '/mnt/d/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',
+            # WSL 环境 - 使用 wslpath 转换为 Windows 路径
+            try:
+                result = subprocess.run(
+                    ['wslpath', '-w', str(p)],
+                    capture_output=True, text=True, check=True
+                )
+                win_path = result.stdout.strip()
+            except Exception:
+                # wslpath 不可用时手动转换
+                win_path = str(p)
+                if win_path.startswith('/mnt/'):
+                    drive = win_path[5]
+                    win_path = drive.upper() + ':' + win_path[6:]
+                    win_path = win_path.replace('/', '\\')
+
+            # 通过 cmd.exe /c start 打开目录，最可靠
+            cmd_paths = [
+                '/mnt/c/Windows/System32/cmd.exe',
+                '/mnt/d/Windows/System32/cmd.exe',
             ]
             last_error = None
-            for ps_path in ps_paths:
-                if Path(ps_path).exists():
+            for cmd_path in cmd_paths:
+                if Path(cmd_path).exists():
                     try:
-                        # 直接调用 explorer "路径"，比 Start-Process 更可靠
-                        # 使用 shell=True 和正确的引号处理中文路径
-                        # 注意：路径中的反斜杠在 shell 命令中需要双重转义
-                        shell_path = win_path.replace('\\', '\\\\')
-                        cmd = f'{ps_path} -Command "explorer \\"{shell_path}\\""'
-                        subprocess.run(cmd, shell=True, check=True)
+                        # 使用 cmd /c start 打开目录 - 空引号是必需的
+                        subprocess.run(
+                            [cmd_path, '/c', 'start', '', win_path],
+                            check=True,
+                            timeout=5
+                        )
                         return {"success": True, "path": win_path}
                     except Exception as e:
                         last_error = str(e)
-            return {"success": False, "error": last_error or "无法找到 PowerShell"}
+            return {"success": False, "error": last_error or "无法找到 cmd.exe"}
         elif system == 'Darwin':  # macOS
             subprocess.run(['open', str(p)], check=True)
             return {"success": True, "path": str(p)}

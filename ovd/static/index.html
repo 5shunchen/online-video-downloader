@@ -416,8 +416,10 @@
         `;
       }
 
+      // 关键：把反斜杠转义成 \\，避免 \7 等被当作八进制转义字符
+      const escapedPath = j.output_path.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       const openBtn = j.status === 'completed'
-        ? `<button class="btn btn-sm btn-outline-primary" onclick="openFolder('${j.output_path.replace(/'/g,"\\'")}')">📂 打开</button>`
+        ? `<button class="btn btn-sm btn-outline-primary" onclick="openFolder('${escapedPath}')">📂 打开</button>`
         : '';
       return `
         <tr>

@@ -209,13 +209,16 @@ async def api_open_folder(path: str) -> dict:
     try:
         import os
         import platform
+        import subprocess
 
-        p = Path(path).parent
+        # 关键：确保路径是原始字符串，不被转义
+        # 使用 Path.resolve() 获取绝对路径，避免任何转义问题
+        p = Path(path).resolve().parent
         if not p.exists():
-            return {"success": False, "error": "目录不存在"}
+            return {"success": False, "error": f"目录不存在: {p}"}
 
         system = platform.system()
-        abs_path = str(p.absolute())
+        abs_path = str(p)
 
         # 检测 WSL 环境
         is_wsl = False
@@ -225,19 +228,19 @@ async def api_open_folder(path: str) -> dict:
                 is_wsl = True
 
         if system == 'Windows':
-            # 原生 Windows - 最简单最可靠：使用 os.startfile
-            # 这是 Python 内置方法，直接调用 Windows API，完美支持中文
+            # 原生 Windows - 直接使用 Path 对象，避免任何字符串转义问题
             try:
-                os.startfile(abs_path)
+                # 直接传 Path 对象，不转字符串
+                os.startfile(p)
                 return {"success": True, "path": abs_path}
             except Exception as e1:
-                # 备选：使用 subprocess 和 explorer.exe（不使用 shell）
+                # 备选：使用 subprocess，路径参数用原始字节
                 try:
-                    # 直接传递路径参数，不经过 shell 解析
+                    # 使用列表形式，shell=False，确保参数不被解析
                     subprocess.run(
-                        ['explorer.exe', abs_path],
+                        ['explorer.exe', str(p)],
                         shell=False,
-                        timeout=5
+                        timeout=10
                     )
                     return {"success": True, "path": abs_path}
                 except Exception as e2:

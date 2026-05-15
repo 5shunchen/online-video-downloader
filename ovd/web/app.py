@@ -215,6 +215,7 @@ async def api_open_folder(path: str) -> dict:
             return {"success": False, "error": "目录不存在"}
 
         system = platform.system()
+        abs_path = str(p.absolute())
 
         # 检测 WSL 环境
         is_wsl = False
@@ -224,26 +225,23 @@ async def api_open_folder(path: str) -> dict:
                 is_wsl = True
 
         if system == 'Windows':
-            # 原生 Windows - 使用 PowerShell 最可靠，完美处理中文和空格
-            abs_path = str(p.absolute())
+            # 原生 Windows - 最简单最可靠：使用 os.startfile
+            # 这是 Python 内置方法，直接调用 Windows API，完美支持中文
             try:
-                # 方法1：使用 PowerShell Invoke-Item - 最可靠的方式
-                subprocess.run(
-                    ['powershell.exe', '-Command', f'Invoke-Item "{abs_path}"'],
-                    shell=False,
-                    timeout=5
-                )
+                os.startfile(abs_path)
                 return {"success": True, "path": abs_path}
-            except Exception:
-                # 方法2：使用 explorer.exe /select,
+            except Exception as e1:
+                # 备选：使用 subprocess 和 explorer.exe（不使用 shell）
                 try:
+                    # 直接传递路径参数，不经过 shell 解析
                     subprocess.run(
-                        ['explorer.exe', f'/select,{abs_path}'],
-                        shell=False
+                        ['explorer.exe', abs_path],
+                        shell=False,
+                        timeout=5
                     )
                     return {"success": True, "path": abs_path}
                 except Exception as e2:
-                    return {"success": False, "error": str(e2)}
+                    return {"success": False, "error": f"{str(e1)} | {str(e2)}"}
         elif is_wsl:
             # WSL 环境 - 使用 wslpath 转换为 Windows 路径
             try:
@@ -260,25 +258,29 @@ async def api_open_folder(path: str) -> dict:
                     win_path = drive.upper() + ':' + win_path[6:]
                     win_path = win_path.replace('/', '\\')
 
-            # 通过 cmd.exe /c start 打开目录，最可靠
-            cmd_paths = [
-                '/mnt/c/Windows/System32/cmd.exe',
-                '/mnt/d/Windows/System32/cmd.exe',
-            ]
-            last_error = None
-            for cmd_path in cmd_paths:
-                if Path(cmd_path).exists():
-                    try:
-                        # 使用 cmd /c start 打开目录 - 空引号是必需的
-                        subprocess.run(
-                            [cmd_path, '/c', 'start', '', win_path],
-                            check=True,
-                            timeout=5
-                        )
-                        return {"success": True, "path": win_path}
-                    except Exception as e:
-                        last_error = str(e)
-            return {"success": False, "error": last_error or "无法找到 cmd.exe"}
+            # 最简单直接：使用 explorer.exe 打开，WSL 会自动桥接
+            # 注意：必须用 shell=True 才能正确调用 Windows 程序
+            try:
+                subprocess.run(f'explorer.exe "{win_path}"', shell=True, timeout=10)
+                return {"success": True, "path": win_path}
+            except Exception as e1:
+                # 备选：使用 cmd.exe
+                cmd_paths = [
+                    '/mnt/c/Windows/System32/cmd.exe',
+                    '/mnt/d/Windows/System32/cmd.exe',
+                ]
+                for cmd_path in cmd_paths:
+                    if Path(cmd_path).exists():
+                        try:
+                            subprocess.run(
+                                [cmd_path, '/c', 'start', '', win_path],
+                                check=True,
+                                timeout=5
+                            )
+                            return {"success": True, "path": win_path}
+                        except Exception:
+                            continue
+                return {"success": False, "error": str(e1)}
         elif system == 'Darwin':  # macOS
             subprocess.run(['open', str(p)], check=True)
             return {"success": True, "path": str(p)}

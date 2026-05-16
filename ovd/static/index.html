@@ -7,18 +7,40 @@
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
   <style>
-    body { background: #f7f9fc; }
+    body { background: #f7f9fc; transition: background 0.3s; }
     .cover { width: 110px; height: 150px; object-fit: cover; border-radius: 6px; }
     .ep-btn { margin: 4px; min-width: 90px; }
     .ep-btn.selected { background: #198754; color: #fff; border-color: #198754; }
     .badge-status { min-width: 84px; }
+    /* 暗黑模式 */
+    body.dark { background: #1a1a2e; color: #eee; }
+    .dark .card { background: #16213e; border-color: #33415c; color: #eee; }
+    .dark .card-body { background: #16213e; color: #eee; }
+    .dark .table { color: #eee; }
+    .dark .table-hover tbody tr:hover { color: #eee; background: #1f2d4d; }
+    .dark .form-control, .dark .form-select { background: #16213e; border-color: #33415c; color: #eee; }
+    .dark .alert-info { background: #1a3a5c; border-color: #2d5a8c; color: #b8d4f0; }
+    .dark .badge.bg-success { background: #2d6a4f !important; }
+    .dark .badge.bg-primary { background: #2d5a8c !important; }
+    .dark .badge.bg-secondary { background: #495057 !important; }
+    .dark .badge.bg-danger { background: #8c2d3a !important; }
+    .dark .btn-outline-secondary { color: #adb5bd; border-color: #495057; }
+    .dark .btn-outline-secondary:hover { color: #fff; background: #495057; }
+    .dark .nav-tabs .nav-link { color: #adb5bd; }
+    .dark .nav-tabs .nav-link.active { background: #16213e; border-color: #33415c; color: #eee; }
+    .dark .text-muted { color: #888 !important; }
   </style>
 </head>
 <body>
 <nav class="navbar navbar-dark bg-primary mb-3">
   <div class="container">
     <span class="navbar-brand mb-0 h1">📺 在线视频下载器</span>
-    <span class="text-white small" id="meta">加载中…</span>
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-sm btn-outline-light" onclick="toggleDarkMode()" title="切换主题">🌓</button>
+      <button class="btn btn-sm btn-outline-light" onclick="showFavorites()" title="我的收藏">⭐</button>
+      <button class="btn btn-sm btn-outline-light" onclick="showSettings()" title="系统设置">⚙</button>
+      <span class="text-white small" id="meta">加载中…</span>
+    </div>
   </div>
 </nav>
 
@@ -30,9 +52,12 @@
         <option value="">全部源</option>
       </select>
       <input id="kw" type="text" class="form-control"
-             placeholder="输入关键字, 例如「遮天」" />
+             placeholder="输入关键字, 例如「遮天」"
+             onfocus="showSearchHistory()"
+             onblur="setTimeout(hideSearchHistory, 200)" />
       <button id="btnSearch" class="btn btn-primary">🔍 搜索</button>
     </div>
+    <div id="searchHistoryDropdown" class="dropdown-menu show mb-3" style="display: none;"></div>
     <div id="results" class="row g-3 mb-4"></div>
     <h5>📥 下载任务</h5>
     <div class="alert alert-info py-2 mb-2" id="downloadStatus">
@@ -82,6 +107,64 @@
       </table>
     </div>
   </div>
+
+  <!-- 设置视图（默认隐藏） -->
+  <div id="settingsView" style="display: none;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5>⚙ 系统设置</h5>
+      <button id="btnBackSettings" class="btn btn-outline-secondary">← 返回搜索</button>
+    </div>
+    <div class="card mb-4">
+      <div class="card-body">
+        <h6 class="card-title mb-3">📡 搜索源管理</h6>
+        <div class="mb-3">
+          <button class="btn btn-primary btn-sm" onclick="showAddSourceModal()">+ 新增搜索源</button>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>源名称</th>
+                <th>API 地址</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="sourcesTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新增/编辑搜索源模态框 -->
+  <div class="modal fade" id="sourceModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="sourceModalTitle">新增搜索源</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="sourceForm">
+            <input type="hidden" id="sourceOldName">
+            <div class="mb-3">
+              <label for="sourceName" class="form-label">源名称</label>
+              <input type="text" class="form-control" id="sourceName" required placeholder="例如：光速资源">
+            </div>
+            <div class="mb-3">
+              <label for="sourceApi" class="form-label">API 地址</label>
+              <input type="text" class="form-control" id="sourceApi" required placeholder="例如：https://api.example.com/api.php/provide/vod">
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="button" class="btn btn-primary" onclick="saveSource()">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -107,12 +190,15 @@
 
   // 切换视图
   function showView(viewName) {
+    $('#searchView').style.display = 'none';
+    $('#detailView').style.display = 'none';
+    $('#settingsView').style.display = 'none';
     if (viewName === 'search') {
       $('#searchView').style.display = 'block';
-      $('#detailView').style.display = 'none';
-    } else {
-      $('#searchView').style.display = 'none';
+    } else if (viewName === 'detail') {
       $('#detailView').style.display = 'block';
+    } else if (viewName === 'settings') {
+      $('#settingsView').style.display = 'block';
     }
   }
 
@@ -153,6 +239,10 @@
                       data-source="${v.source_name}" data-vod-id="${v.vod_id}" data-name="${v.name.replace(/'/g,"\\'")}">
                 <span class="status-text">查看分集</span>
               </button>
+              <button class="btn btn-sm btn-outline-warning ms-1 fav-btn"
+                      data-source="${v.source_name}" data-vod-id="${v.vod_id}" data-name="${v.name.replace(/'/g,"\\'")}" data-pic="${(v.pic||'').replace(/'/g,"\\'")}" data-remarks="${(v.remarks||'').replace(/'/g,"\\'")}" data-year="${(v.year||'').replace(/'/g,"\\'")}" data-area="${(v.area||'').replace(/'/g,"\\'")}" data-type-name="${(v.type_name||'').replace(/'/g,"\\'")}">
+                ⭐ 收藏
+              </button>
             </div>
           </div>
         </div></div>
@@ -164,8 +254,106 @@
       btn.onclick = () => handleOpenDetail(btn.dataset.source, parseInt(btn.dataset.vodId), btn.dataset.name);
     });
 
+    // 绑定收藏按钮事件
+    document.querySelectorAll('.fav-btn').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const item = {
+          source_name: btn.dataset.source,
+          vod_id: parseInt(btn.dataset.vodId),
+          name: btn.dataset.name,
+          pic: btn.dataset.pic,
+          remarks: btn.dataset.remarks,
+          year: btn.dataset.year,
+          area: btn.dataset.area,
+          type_name: btn.dataset.typeName,
+        };
+        await toggleFavorite(item);
+        // 切换按钮样式
+        const isFav = await isFavorite(item.source_name, item.vod_id);
+        btn.classList.toggle('btn-warning', isFav);
+        btn.classList.toggle('btn-outline-warning', !isFav);
+        btn.textContent = isFav ? '⭐ 已收藏' : '⭐ 收藏';
+      };
+      // 初始状态检查
+      (async () => {
+        const isFav = await isFavorite(btn.dataset.source, parseInt(btn.dataset.vodId));
+        btn.classList.toggle('btn-warning', isFav);
+        btn.classList.toggle('btn-outline-warning', !isFav);
+        btn.textContent = isFav ? '⭐ 已收藏' : '⭐ 收藏';
+      })();
+    });
+
     // 后台异步验证搜索结果可用性
     validateSearchResults(data.items);
+  }
+
+  // 渲染搜索结果（供收藏页等复用）
+  function renderResults(items) {
+    $('#results').innerHTML = items.map((v, i) => `
+      <div class="col-md-6 result-card" data-source="${v.source_name}" data-vod-id="${v.vod_id}">
+        <div class="card h-100"><div class="row g-0">
+          <div class="col-auto p-2">
+            <img class="cover" src="${v.pic || ''}"
+                 onerror="this.style.visibility='hidden'" alt="" />
+          </div>
+          <div class="col">
+            <div class="card-body">
+              <h6 class="card-title mb-1">${escapeHTML(v.name)}
+                <span class="badge bg-secondary ms-1">${escapeHTML(v.remarks||'')}</span>
+              </h6>
+              <p class="small text-muted mb-2">
+                ${escapeHTML(v.year||'')} · ${escapeHTML(v.area||'')}
+                · ${escapeHTML(v.type_name||'')}
+                · 源: ${escapeHTML(v.source_name)}
+              </p>
+              <button class="btn btn-sm btn-outline-primary detail-btn"
+                      data-source="${v.source_name}" data-vod-id="${v.vod_id}" data-name="${v.name.replace(/'/g,"\\'")}">
+                <span class="status-text">查看分集</span>
+              </button>
+              <button class="btn btn-sm btn-outline-warning ms-1 fav-btn"
+                      data-source="${v.source_name}" data-vod-id="${v.vod_id}" data-name="${v.name.replace(/'/g,"\\'")}" data-pic="${(v.pic||'').replace(/'/g,"\\'")}" data-remarks="${(v.remarks||'').replace(/'/g,"\\'")}" data-year="${(v.year||'').replace(/'/g,"\\'")}" data-area="${(v.area||'').replace(/'/g,"\\'")}" data-type-name="${(v.type_name||'').replace(/'/g,"\\'")}">
+                ⭐ 收藏
+              </button>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    `).join('');
+
+    // 绑定点击事件
+    document.querySelectorAll('.detail-btn').forEach(btn => {
+      btn.onclick = () => handleOpenDetail(btn.dataset.source, parseInt(btn.dataset.vodId), btn.dataset.name);
+    });
+
+    // 绑定收藏按钮事件
+    document.querySelectorAll('.fav-btn').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const item = {
+          source_name: btn.dataset.source,
+          vod_id: parseInt(btn.dataset.vodId),
+          name: btn.dataset.name,
+          pic: btn.dataset.pic,
+          remarks: btn.dataset.remarks,
+          year: btn.dataset.year,
+          area: btn.dataset.area,
+          type_name: btn.dataset.typeName,
+        };
+        await toggleFavorite(item);
+        const isFav = await isFavorite(item.source_name, item.vod_id);
+        btn.classList.toggle('btn-warning', isFav);
+        btn.classList.toggle('btn-outline-warning', !isFav);
+        btn.textContent = isFav ? '⭐ 已收藏' : '⭐ 收藏';
+      };
+      // 初始状态检查
+      (async () => {
+        const isFav = await isFavorite(btn.dataset.source, parseInt(btn.dataset.vodId));
+        btn.classList.toggle('btn-warning', isFav);
+        btn.classList.toggle('btn-outline-warning', !isFav);
+        btn.textContent = isFav ? '⭐ 已收藏' : '⭐ 收藏';
+      })();
+    });
   }
 
   // 后台异步验证搜索结果
@@ -227,29 +415,31 @@
 
       $('#detailTitle').textContent = '📺 ' + currentDetail.videoName;
 
-      // 渲染播放源标签
-      let sourceBadges = '';
+      // 保存所有播放源供切换
+      currentDetail.allPlaySources = d.play_sources;
+
+      // 渲染播放源选择下拉框
+      let sourceOptions = '';
       for (let s of d.play_sources) {
-        const cls = s.is_recommended ? 'bg-success' : 'bg-secondary';
-        const star = s.is_recommended ? ' ★' : '';
-        sourceBadges += `<span class="badge ${cls} me-1">${escapeHTML(s.flag)}${star}</span>`;
+        const selected = s.flag === best.flag ? 'selected' : '';
+        const rec = s.is_recommended ? ' ★推荐' : '';
+        const m3u8 = s.is_m3u8 ? ' [直链]' : ' [解析]';
+        sourceOptions += `<option value="${escapeHTML(s.flag)}" ${selected}>${escapeHTML(s.flag)}${rec}${m3u8} (${s.episodes.length}集)</option>`;
       }
 
       // 渲染分集按钮
-      let epsHtml = '';
-      for (let i = 0; i < currentDetail.episodes.length; i++) {
-        const e = currentDetail.episodes[i];
-        epsHtml += `<button type="button" class="btn btn-sm btn-outline-secondary ep-btn"
-          onclick="toggleEp(${i})">${escapeHTML(e.name)}</button>`;
-      }
+      const epsHtml = renderEpisodes();
 
       $('#detailCard').innerHTML = `
         <div class="card-body">
           <h5 class="mb-2">${escapeHTML(d.summary.name)} <small class="text-muted">${escapeHTML(d.summary.remarks||'')}</small></h5>
-          <p class="small text-muted">
-            播放源: ${sourceBadges}
-            <br/>使用源: <code>${escapeHTML(best.flag)}</code> · 共 ${currentDetail.episodes.length} 集
-          </p>
+          <div class="mb-2">
+            <label class="small text-muted me-2">播放源:</label>
+            <select id="sourceSelect" class="form-select form-select-sm d-inline-block w-auto" onchange="switchPlaySource()">
+              ${sourceOptions}
+            </select>
+            <small class="text-muted ms-2">共 <span id="epCount">${currentDetail.episodes.length}</span> 集</small>
+          </div>
           <div class="mb-2">
             <button class="btn btn-sm btn-light" onclick="selectAll(true)">全选</button>
             <button class="btn btn-sm btn-light" onclick="selectAll(false)">全不选</button>
@@ -261,6 +451,38 @@
 
     } catch (e) {
       $('#detailCard').innerHTML = `<div class="card-body text-danger">加载失败: ${e.message}</div>`;
+    }
+  }
+
+  function renderEpisodes() {
+    // 渲染分集按钮
+    let epsHtml = '';
+    for (let i = 0; i < currentDetail.episodes.length; i++) {
+      const e = currentDetail.episodes[i];
+      epsHtml += `<button type="button" class="btn btn-sm btn-outline-secondary ep-btn"
+        onclick="toggleEp(${i})">${escapeHTML(e.name)}</button>`;
+    }
+    return epsHtml;
+  }
+
+  function switchPlaySource() {
+    // 切换播放源
+    const flag = $('#sourceSelect').value;
+    const source = currentDetail.allPlaySources.find(s => s.flag === flag);
+    if (source) {
+      currentDetail.flag = flag;
+      currentDetail.episodes = source.episodes;
+      currentDetail.selected.clear();
+      // 重新渲染分集
+      const epsBox = $('#epsBox');
+      if (epsBox) {
+        epsBox.innerHTML = renderEpisodes();
+      }
+      // 更新集数显示
+      const epCount = $('#epCount');
+      if (epCount) {
+        epCount.textContent = currentDetail.episodes.length;
+      }
     }
   }
 
@@ -421,6 +643,12 @@
       const openBtn = j.status === 'completed'
         ? `<button class="btn btn-sm btn-outline-primary" onclick="openFolder('${escapedPath}')">📂 打开</button>`
         : '';
+      const downloadBtn = j.status === 'completed'
+        ? `<button class="btn btn-sm btn-outline-success ms-1" onclick="downloadJob(${j.id})" title="下载到本地后自动删除服务器文件">⬇️ 下载</button>`
+        : '';
+      const exportedBadge = j.exported
+        ? `<span class="badge bg-info ms-1">已导出</span>`
+        : '';
       return `
         <tr>
           <td><input type="checkbox" class="job-checkbox" data-id="${j.id}" onchange="updateDeleteButtons()"></td>
@@ -435,6 +663,8 @@
           <td><code>${escapeHTML(j.output_path)}</code></td>
           <td>
             ${openBtn}
+            ${downloadBtn}
+            ${exportedBadge}
             <button class="btn btn-sm btn-outline-danger ms-1" onclick="deleteJob(${j.id})">🗑️</button>
           </td>
         </tr>`;
@@ -451,6 +681,7 @@
   $('#btnSearch').onclick = search;
   $('#kw').addEventListener('keyup', e => { if (e.key === 'Enter') search(); });
   $('#btnBack').onclick = () => showView('search');
+  $('#btnBackSettings').onclick = () => showView('search');
 
   // 初始化
   api('/api/version').then(v => {
@@ -468,11 +699,35 @@
   refreshJobs();
   setInterval(refreshJobs, 2000);
 
+  // 加载主题设置
+  loadTheme();
+
   // 删除功能
   async function deleteJob(jobId) {
     if (!confirm('确定要删除这条下载记录吗？（不会删除已下载的文件）')) return;
     await api(`/api/jobs/${jobId}`, { method: 'DELETE' });
     await refreshJobs();
+  }
+
+  async function downloadJob(jobId) {
+    // 先触发浏览器下载
+    const url = `/api/jobs/${jobId}/download?delete_after=true`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';  // 让浏览器从响应头获取文件名
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    // 延迟 3 秒后删除服务器端文件并刷新状态
+    setTimeout(async () => {
+      try {
+        await api(`/api/jobs/${jobId}/delete-file`, { method: 'POST' });
+      } catch (e) {
+        console.log('Delete server file failed:', e);
+      }
+      refreshJobs();
+    }, 3000);
   }
 
   async function deleteSelectedJobs() {
@@ -507,8 +762,132 @@
     if (btnDetail) btnDetail.disabled = checked === 0;
   }
 
+  // --- 搜索历史 --------------------------------------------------------
+
+  async function showSearchHistory() {
+    const dropdown = $('#searchHistoryDropdown');
+    const data = await api('/api/search-history?limit=20');
+    if (data.items.length === 0) {
+      dropdown.style.display = 'none';
+      return;
+    }
+    let html = '<h6 class="dropdown-header">🔍 搜索历史</h6>';
+    for (const item of data.items) {
+      html += `
+        <a class="dropdown-item d-flex justify-content-between align-items-center"
+           onclick="doSearch('${escapeHTML(item.keyword).replace(/'/g, "\\'")}')"
+           href="javascript:void(0)">
+          <span>${escapeHTML(item.keyword)}</span>
+          <button class="btn btn-sm btn-outline-danger py-0 px-1"
+                  onclick="event.stopPropagation();removeSearchHistory('${escapeHTML(item.keyword).replace(/'/g, "\\'")}')">×</button>
+        </a>
+      `;
+    }
+    html += '<button class="dropdown-item text-danger" onclick="clearSearchHistory()">清空全部</button>';
+    dropdown.innerHTML = html;
+    dropdown.style.display = 'block';
+  }
+
+  function hideSearchHistory() {
+    $('#searchHistoryDropdown').style.display = 'none';
+  }
+
+  function doSearch(keyword) {
+    $('#kw').value = keyword;
+    search();
+    hideSearchHistory();
+  }
+
+  async function removeSearchHistory(keyword) {
+    await api(`/api/search-history/${encodeURIComponent(keyword)}`, { method: 'DELETE' });
+    showSearchHistory();
+  }
+
+  async function clearSearchHistory() {
+    if (!confirm('确定要清空搜索历史吗？')) return;
+    await api('/api/search-history', { method: 'DELETE' });
+    hideSearchHistory();
+  }
+
+  // --- 收藏功能 --------------------------------------------------------
+
+  let favoritesView = false;
+
+  async function showFavorites() {
+    favoritesView = true;
+    showView('search');
+    const oldTitle = $('#resultsTitle');
+    if (oldTitle) oldTitle.remove();
+    $('#searchView').insertAdjacentHTML('afterbegin', '<h5 id="resultsTitle" class="mb-3">⭐ 我的收藏</h5>');
+
+    const data = await api('/api/favorites');
+    if (data.items.length === 0) {
+      $('#results').innerHTML = '<div class="text-muted text-center py-5">还没有收藏</div>';
+      return;
+    }
+    renderResults(data.items);
+  }
+
+  async function toggleFavorite(item) {
+    const isFav = await isFavorite(item.source_name, item.vod_id);
+    if (isFav) {
+      await removeFavorite(item.source_name, item.vod_id);
+    } else {
+      await addFavorite(item);
+    }
+  }
+
+  async function isFavorite(sourceName, vodId) {
+    const data = await api(`/api/favorites/${encodeURIComponent(sourceName)}/${vodId}`);
+    return data.is_favorite;
+  }
+
+  async function addFavorite(item) {
+    await api('/api/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_name: item.source_name,
+        vod_id: item.vod_id,
+        name: item.name,
+        pic: item.pic || '',
+        remarks: item.remarks || '',
+        year: item.year || '',
+        area: item.area || '',
+        type_name: item.type_name || '',
+      }),
+    });
+  }
+
+  async function removeFavorite(sourceName, vodId) {
+    await api(`/api/favorites/${sourceName}/${vodId}`, { method: 'DELETE' });
+  }
+
+  // --- 暗黑模式 --------------------------------------------------------
+
+  async function toggleDarkMode() {
+    const isDark = document.body.classList.toggle('dark');
+    await api(`/api/settings/theme?dark_mode=${isDark}`, { method: 'POST' });
+  }
+
+  async function loadTheme() {
+    try {
+      const data = await api('/api/settings/theme');
+      if (data.dark_mode) {
+        document.body.classList.add('dark');
+      }
+    } catch (e) {
+        // 忽略错误，使用默认
+      }
+  }
+
   // 暴露全局函数
   window.handleOpenDetail = handleOpenDetail;
+  window.doSearch = doSearch;
+  window.removeSearchHistory = removeSearchHistory;
+  window.clearSearchHistory = clearSearchHistory;
+  window.showFavorites = showFavorites;
+  window.toggleDarkMode = toggleDarkMode;
   window.toggleEp = toggleEp;
   window.selectAll = selectAll;
   window.downloadSelected = downloadSelected;
@@ -518,6 +897,131 @@
   window.deleteAllJobs = deleteAllJobs;
   window.selectAllJobs = selectAllJobs;
   window.updateDeleteButtons = updateDeleteButtons;
+
+  // --- 搜索源管理 --------------------------------------------------------
+
+  let sourceModal = null;
+
+  function showSettings() {
+    showView('settings');
+    loadSources();
+  }
+
+  async function loadSources() {
+    const data = await api('/api/sources');
+    const tbody = $('#sourcesTableBody');
+    tbody.innerHTML = data.sources.map((s, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${escapeHTML(s.name)}</td>
+        <td><code class="text-muted small">${escapeHTML(s.api)}</code></td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary me-1" onclick="editSource('${escapeHTML(s.name).replace(/'/g, "\\'")}', '${escapeHTML(s.api).replace(/'/g, "\\'")}')">编辑</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteSource('${escapeHTML(s.name).replace(/'/g, "\\'")}')">删除</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  function showAddSourceModal() {
+    $('#sourceModalTitle').textContent = '新增搜索源';
+    $('#sourceOldName').value = '';
+    $('#sourceName').value = '';
+    $('#sourceApi').value = '';
+    if (!sourceModal) {
+      sourceModal = new bootstrap.Modal($('#sourceModal'));
+    }
+    sourceModal.show();
+  }
+
+  function editSource(name, api) {
+    $('#sourceModalTitle').textContent = '编辑搜索源';
+    $('#sourceOldName').value = name;
+    $('#sourceName').value = name;
+    $('#sourceApi').value = api;
+    if (!sourceModal) {
+      sourceModal = new bootstrap.Modal($('#sourceModal'));
+    }
+    sourceModal.show();
+  }
+
+  async function saveSource() {
+    const oldName = $('#sourceOldName').value;
+    const newName = $('#sourceName').value.trim();
+    const newApi = $('#sourceApi').value.trim();
+
+    if (!newName || !newApi) {
+      alert('名称和 API 地址不能为空');
+      return;
+    }
+
+    try {
+      if (oldName) {
+        // 编辑模式
+        await api('/api/sources', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ old_name: oldName, new_name: newName, new_api: newApi }),
+        });
+      } else {
+        // 新增模式
+        await api('/api/sources', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName, api: newApi }),
+        });
+      }
+      sourceModal.hide();
+      loadSources();
+      // 更新页面元数据
+      const v = await api('/api/version');
+      $('#meta').textContent =
+        `v${v.version} · 下载至 ${v.download_dir} · 数据源 ${v.sources.map(s=>s.name).join('/')}`;
+      // 更新搜索下拉框
+      const select = $('#sourceSelect');
+      select.innerHTML = '<option value="">全部源</option>';
+      v.sources.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.name;
+        opt.textContent = s.name;
+        select.appendChild(opt);
+      });
+    } catch (e) {
+      alert('保存失败: ' + e.message);
+    }
+  }
+
+  async function deleteSource(name) {
+    if (!confirm(`确定要删除搜索源 '${name}' 吗？`)) {
+      return;
+    }
+    try {
+      await api(`/api/sources/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      loadSources();
+      // 更新页面元数据
+      const v = await api('/api/version');
+      $('#meta').textContent =
+        `v${v.version} · 下载至 ${v.download_dir} · 数据源 ${v.sources.map(s=>s.name).join('/')}`;
+      // 更新搜索下拉框
+      const select = $('#sourceSelect');
+      select.innerHTML = '<option value="">全部源</option>';
+      v.sources.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.name;
+        opt.textContent = s.name;
+        select.appendChild(opt);
+      });
+    } catch (e) {
+      alert('删除失败: ' + e.message);
+    }
+  }
+
+  window.showSettings = showSettings;
+  window.showAddSourceModal = showAddSourceModal;
+  window.editSource = editSource;
+  window.saveSource = saveSource;
+  window.deleteSource = deleteSource;
 </script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

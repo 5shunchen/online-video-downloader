@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -88,6 +89,7 @@ class DownloadJob:
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
+    exported: bool = False  # 是否已导出到本地（用于远程服务模式）
     # 下载进度
     total_chunks: int = 0
     downloaded_chunks: int = 0
@@ -120,7 +122,27 @@ class DownloadJob:
             "download_speed": self.download_speed,
             "bytes_downloaded": self.bytes_downloaded,
             "elapsed_seconds": elapsed,
+            "exported": self.exported,
         }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DownloadJob":
+        return cls(
+            id=d["id"],
+            video_name=d["video_name"],
+            episode_name=d["episode_name"],
+            url=d["url"],
+            output_path=Path(d["output_path"]),
+            status=JobStatus(d["status"]),
+            error=d.get("error"),
+            created_at=d["created_at"],
+            started_at=d.get("started_at"),
+            finished_at=d.get("finished_at"),
+            exported=d.get("exported", False),
+            total_chunks=d.get("total_chunks", 0),
+            downloaded_chunks=d.get("downloaded_chunks", 0),
+            bytes_downloaded=d.get("bytes_downloaded", 0),
+        )
 
 
 class JobManager:
@@ -139,6 +161,8 @@ class JobManager:
     async def start(self) -> None:
         if self._workers:
             return
+        # 加载持久化的任务（断点续传）
+        self.load_jobs()
         # 初始化全局 httpx client - 经过实际测试的最佳参数
         limits = httpx.Limits(
             max_keepalive_connections=30,
@@ -198,6 +222,7 @@ class JobManager:
         )
         self._jobs[jid] = job
         self._queue.put_nowait(job)
+        self.save_jobs()  # 入队后立即保存
         return job
 
     def enqueue_many(
@@ -218,19 +243,74 @@ class JobManager:
             return False
         job.status = JobStatus.CANCELED
         job.finished_at = time.time()
+        self.save_jobs()
         return True
 
     def delete_job(self, job_id: int) -> bool:
         """删除单个下载记录（不删除文件，仅从列表移除）"""
         if job_id in self._jobs:
             del self._jobs[job_id]
+            self.save_jobs()
             return True
         return False
+
+    def get_job(self, job_id: int) -> DownloadJob | None:
+        """获取单个任务信息"""
+        return self._jobs.get(job_id)
+
+    def mark_as_exported(self, job_id: int) -> bool:
+        """标记任务为已导出（用于远程下载后标记）"""
+        job = self._jobs.get(job_id)
+        if job is not None:
+            job.exported = True
+            self.save_jobs()
+            return True
+        return False
+
+    # --- 断点续传: 任务持久化 --------------------------------------------
+    @property
+    def _jobs_file(self) -> Path:
+        return self._settings.download_dir / ".ovd_jobs.json"
+
+    def save_jobs(self) -> None:
+        """保存所有任务到文件"""
+        try:
+            self._jobs_file.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "next_id": next(self._next_id, 1),  # 这会消耗一个，后面要修正
+                "jobs": [j.to_dict() for j in self._jobs.values()],
+            }
+            # 修正 next_id
+            data["next_id"] = max(self._jobs.keys(), default=0) + 1
+            with open(self._jobs_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass  # 保存失败不影响程序运行
+
+    def load_jobs(self) -> None:
+        """从文件加载任务"""
+        try:
+            if self._jobs_file.exists():
+                with open(self._jobs_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                next_id = data.get("next_id", 1)
+                self._next_id = count(start=next_id)
+                for jd in data.get("jobs", []):
+                    job = DownloadJob.from_dict(jd)
+                    self._jobs[job.id] = job
+                    # 未完成的任务重新加入队列
+                    if job.status in (JobStatus.QUEUED, JobStatus.DOWNLOADING):
+                        job.status = JobStatus.QUEUED  # 重置为排队状态
+                        job.started_at = None
+                        self._queue.put_nowait(job)
+        except Exception:
+            pass  # 加载失败不影响程序运行
 
     def delete_all_jobs(self) -> int:
         """删除所有下载记录（不删除文件）"""
         count = len(self._jobs)
         self._jobs.clear()
+        self.save_jobs()
         return count
 
     # --- 内部 worker ------------------------------------------------
@@ -267,6 +347,7 @@ class JobManager:
             job.error = repr(exc)
         finally:
             job.finished_at = time.time()
+            self.save_jobs()  # 任务完成后保存
 
     async def _download_m3u8(self, job: DownloadJob) -> None:
         """m3u8 分片并行下载 + AES 解密 + 内存合并（零磁盘 IO）。"""

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -27,13 +27,17 @@ from pathlib import Path
 try:
     from ovd import __version__
     from ovd.api import MacCMSClient
-    from ovd.config import Settings
+    from ovd.config import Settings, Source
     from ovd.downloader import JobManager
+    from ovd.downloader.jobs import JobStatus
+    from ovd.storage import LocalStorage
 except ImportError:
     from .. import __version__
     from ..api import MacCMSClient
-    from ..config import Settings
+    from ..config import Settings, Source
     from ..downloader import JobManager
+    from ..downloader.jobs import JobStatus
+    from ..storage import LocalStorage
 
 # PyInstaller 兼容：从临时目录加载静态文件
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -52,15 +56,39 @@ class DownloadIn(BaseModel):
     episodes: list[EpisodeIn] = Field(..., min_length=1)
 
 
+class FavoriteIn(BaseModel):
+    source_name: str
+    vod_id: int
+    name: str
+    pic: str = ""
+    remarks: str = ""
+    year: str = ""
+    area: str = ""
+    type_name: str = ""
+
+
+class SourceIn(BaseModel):
+    name: str
+    api: str
+
+
+class SourceUpdateIn(BaseModel):
+    old_name: str
+    new_name: str
+    new_api: str
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings.load()
     client = MacCMSClient(settings)
     manager = JobManager(settings)
+    storage = LocalStorage(settings.download_dir)
     await manager.start()
     app.state.settings = settings
     app.state.client = client
     app.state.manager = manager
+    app.state.storage = storage
     try:
         yield
     finally:
@@ -96,7 +124,12 @@ async def api_version() -> dict:
 @app.get("/api/search")
 async def api_search(wd: str, source: str | None = None) -> dict:
     client: MacCMSClient = app.state.client
+    storage: LocalStorage = app.state.storage
     items = await client.search(wd)
+
+    # 记录搜索历史
+    if wd.strip():
+        storage.add_search_history(wd)
 
     # 按数据源筛选
     if source:
@@ -339,3 +372,212 @@ async def api_delete_jobs(req: DeleteJobsRequest | None = None) -> dict:
         if manager.delete_job(job_id):
             count += 1
     return {"deleted_count": count, "ids": req.ids}
+
+
+@app.get("/api/jobs/{job_id}/download")
+async def api_download_job(job_id: int, delete_after: bool = True):
+    """下载任务视频文件（可选下载后自动删除）"""
+    manager: JobManager = app.state.manager
+    job = manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="只能下载已完成的任务")
+
+    file_path = job.output_path
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    # 标记为已导出（用于 UI 显示）
+    if delete_after:
+        manager.mark_as_exported(job_id)
+
+    # 先用 FileResponse 返回文件
+    # 注意：文件删除需要由前端调用单独的 API
+    return FileResponse(
+        file_path,
+        media_type="video/mp4",
+        filename=file_path.name,
+    )
+
+
+@app.post("/api/jobs/{job_id}/delete-file")
+async def api_delete_job_file(job_id: int) -> dict:
+    """删除已导出任务的服务器端文件"""
+    manager: JobManager = app.state.manager
+    job = manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    file_path = job.output_path
+    if file_path.exists():
+        try:
+            file_path.unlink()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"删除文件失败: {e}")
+
+    return {"success": True, "deleted": str(file_path)}
+
+
+# --- 搜索历史 --------------------------------------------------------------
+
+@app.get("/api/search-history")
+async def api_search_history(limit: int = 20) -> dict:
+    """获取搜索历史"""
+    storage: LocalStorage = app.state.storage
+    return {
+        "items": storage.get_search_history(limit),
+    }
+
+
+@app.delete("/api/search-history")
+async def api_clear_search_history() -> dict:
+    """清空搜索历史"""
+    storage: LocalStorage = app.state.storage
+    storage.clear_search_history()
+    return {"success": True}
+
+
+@app.delete("/api/search-history/{keyword:path}")
+async def api_remove_search_history(keyword: str) -> dict:
+    """删除单个搜索历史"""
+    storage: LocalStorage = app.state.storage
+    storage.remove_search_history(keyword)
+    return {"success": True, "keyword": keyword}
+
+
+# --- 收藏 -------------------------------------------------------------------
+
+@app.get("/api/favorites")
+async def api_get_favorites() -> dict:
+    """获取所有收藏"""
+    storage: LocalStorage = app.state.storage
+    return {
+        "items": storage.get_favorites(),
+    }
+
+
+@app.post("/api/favorites")
+async def api_add_favorite(data: FavoriteIn) -> dict:
+    """添加收藏"""
+    storage: LocalStorage = app.state.storage
+    storage.add_favorite(
+        source_name=data.source_name,
+        vod_id=data.vod_id,
+        name=data.name,
+        pic=data.pic,
+        remarks=data.remarks,
+        year=data.year,
+        area=data.area,
+        type_name=data.type_name,
+    )
+    return {"success": True, "source_name": data.source_name, "vod_id": data.vod_id}
+
+
+@app.delete("/api/favorites/{source_name}/{vod_id}")
+async def api_remove_favorite(source_name: str, vod_id: int) -> dict:
+    """取消收藏"""
+    storage: LocalStorage = app.state.storage
+    storage.remove_favorite(source_name, vod_id)
+    return {"success": True, "source_name": source_name, "vod_id": vod_id}
+
+
+@app.get("/api/favorites/{source_name}/{vod_id}")
+async def api_check_favorite(source_name: str, vod_id: int) -> dict:
+    """检查是否已收藏"""
+    storage: LocalStorage = app.state.storage
+    return {
+        "is_favorite": storage.is_favorite(source_name, vod_id),
+    }
+
+
+# --- 主题设置 ---------------------------------------------------------------
+
+@app.get("/api/settings/theme")
+async def api_get_theme() -> dict:
+    """获取主题设置"""
+    storage: LocalStorage = app.state.storage
+    return {
+        "dark_mode": storage.dark_mode,
+    }
+
+
+@app.post("/api/settings/theme")
+async def api_set_theme(dark_mode: bool) -> dict:
+    """设置主题"""
+    storage: LocalStorage = app.state.storage
+    storage.dark_mode = dark_mode
+    return {"success": True, "dark_mode": dark_mode}
+
+
+# --- 搜索源管理 -------------------------------------------------------------
+
+@app.get("/api/sources")
+async def api_get_sources() -> dict:
+    """获取所有搜索源"""
+    settings: Settings = app.state.settings
+    return {
+        "sources": [s.to_dict() for s in settings.sources],
+    }
+
+
+@app.post("/api/sources")
+async def api_add_source(source: SourceIn) -> dict:
+    """新增搜索源"""
+    settings: Settings = app.state.settings
+    sources = list(settings.sources)
+    # 检查名称是否已存在
+    for s in sources:
+        if s.name == source.name:
+            raise HTTPException(status_code=400, detail=f"源名称 '{source.name}' 已存在")
+    sources.append(Source(name=source.name, api=source.api))
+    settings.save_sources(sources)
+    # 保存后需要更新 app.state.settings
+    app.state.settings = Settings.load()
+    # 同时需要更新 client 使用新的源列表
+    app.state.client = MacCMSClient(app.state.settings)
+    return {"success": True, "source": {"name": source.name, "api": source.api}}
+
+
+@app.put("/api/sources")
+async def api_update_source(data: SourceUpdateIn) -> dict:
+    """修改搜索源"""
+    settings: Settings = app.state.settings
+    sources = list(settings.sources)
+    # 查找并更新
+    found = False
+    for i, s in enumerate(sources):
+        if s.name == data.old_name:
+            # 检查新名称是否与其他源冲突
+            if data.new_name != data.old_name:
+                for j, s2 in enumerate(sources):
+                    if j != i and s2.name == data.new_name:
+                        raise HTTPException(status_code=400, detail=f"源名称 '{data.new_name}' 已存在")
+            sources[i] = Source(name=data.new_name, api=data.new_api)
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail=f"源 '{data.old_name}' 不存在")
+    settings.save_sources(sources)
+    app.state.settings = Settings.load()
+    app.state.client = MacCMSClient(app.state.settings)
+    return {"success": True, "source": {"name": data.new_name, "api": data.new_api}}
+
+
+@app.delete("/api/sources/{name}")
+async def api_delete_source(name: str) -> dict:
+    """删除搜索源"""
+    settings: Settings = app.state.settings
+    sources = list(settings.sources)
+    # 至少保留一个源
+    if len(sources) <= 1:
+        raise HTTPException(status_code=400, detail="至少需要保留一个搜索源")
+    # 查找并删除
+    for i, s in enumerate(sources):
+        if s.name == name:
+            del sources[i]
+            settings.save_sources(sources)
+            app.state.settings = Settings.load()
+            app.state.client = MacCMSClient(app.state.settings)
+            return {"success": True, "deleted": name}
+    raise HTTPException(status_code=404, detail=f"源 '{name}' 不存在")

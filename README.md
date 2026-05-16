@@ -69,6 +69,246 @@ Windows exe 用户直接双击运行即可，会自动打开浏览器。
 --no-browser       不自动打开浏览器
 ```
 
+## Linux 部署指南
+
+### 系统要求
+
+- Linux x86_64 (Ubuntu 20.04+, Debian 11+, CentOS 8+, etc.)
+- Python 3.10+
+- ffmpeg 4.4+
+
+### 1. 安装系统依赖
+
+#### Ubuntu / Debian
+```bash
+sudo apt update
+sudo apt install -y python3 python3-pip python3-venv ffmpeg git
+```
+
+#### CentOS / RHEL / Rocky Linux
+```bash
+sudo dnf install -y python3 python3-pip ffmpeg git
+# 若 ffmpeg 找不到，先启用 EPEL 和 RPM Fusion 源
+sudo dnf install -y epel-release
+sudo dnf install -y --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm
+sudo dnf install -y ffmpeg
+```
+
+### 2. 获取源码并安装
+
+```bash
+# 克隆仓库
+git clone https://github.com/5shunchen/online-video-downloader.git
+cd online-video-downloader
+
+# 创建虚拟环境（推荐）
+python3 -m venv venv
+source venv/bin/activate
+
+# 安装 Python 依赖
+pip install -r requirements.txt
+```
+
+### 3. 运行方式
+
+#### 方式一：直接运行（测试用）
+```bash
+# 激活虚拟环境
+source venv/bin/activate
+
+# 启动服务（监听所有网卡，用于远程访问）
+python -m ovd --host 0.0.0.0 --port 8787
+```
+
+访问 `http://服务器IP:8787` 即可使用。
+
+#### 方式二：后台运行（nohup）
+```bash
+source venv/bin/activate
+nohup python -m ovd --host 0.0.0.0 --port 8787 --no-browser > ovd.log 2>&1 &
+
+# 查看日志
+tail -f ovd.log
+
+# 停止服务
+pkill -f "python -m ovd"
+```
+
+#### 方式三：Systemd 服务（生产环境推荐）
+
+创建服务文件 `/etc/systemd/system/ovd.service`：
+```ini
+[Unit]
+Description=Online Video Downloader
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/online-video-downloader
+Environment="PATH=/opt/online-video-downloader/venv/bin"
+ExecStart=/opt/online-video-downloader/venv/bin/python -m ovd --host 0.0.0.0 --port 8787 --no-browser
+Restart=always
+RestartSec=10
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动并启用服务：
+```bash
+# 重新加载 systemd 配置
+sudo systemctl daemon-reload
+
+# 启动服务
+sudo systemctl start ovd
+
+# 设置开机自启
+sudo systemctl enable ovd
+
+# 查看状态
+sudo systemctl status ovd
+
+# 查看日志
+sudo journalctl -u ovd -f
+```
+
+### 4. 防火墙配置
+
+#### Ubuntu / Debian (ufw)
+```bash
+sudo ufw allow 8787/tcp
+sudo ufw reload
+```
+
+#### CentOS / RHEL (firewalld)
+```bash
+sudo firewall-cmd --permanent --add-port=8787/tcp
+sudo firewall-cmd --reload
+```
+
+### 5. Nginx 反向代理（可选）
+
+用于配置域名、HTTPS、负载均衡等场景：
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    # 允许上传的文件大小（按需调整）
+    client_max_body_size 10G;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket 支持（若使用）
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # 超时设置
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+配置 HTTPS（使用 Let's Encrypt）：
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d your-domain.com
+```
+
+### 6. Docker 部署
+
+创建 `Dockerfile`：
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制源码
+COPY . .
+
+# 暴露端口
+EXPOSE 8787
+
+# 启动命令
+CMD ["python", "-m", "ovd", "--host", "0.0.0.0", "--port", "8787", "--no-browser"]
+```
+
+构建并运行：
+```bash
+docker build -t ovd .
+docker run -d -p 8787:8787 -v /path/to/downloads:/app/downloads --name ovd ovd
+```
+
+### 7. 远程使用流程
+
+1. 确保服务已启动并监听 `0.0.0.0:8787`
+2. 本地浏览器访问：`http://服务器IP:8787`（或域名）
+3. 搜索并下载视频到服务器
+4. 服务器下载完成后，点击任务右侧的「⬇️ 下载」按钮
+5. 文件自动下载到本地，同时服务器端文件自动删除，节省磁盘空间
+
+### 8. 常见问题排查
+
+#### 问题：无法访问 Web UI
+```bash
+# 检查端口是否在监听
+netstat -tlnp | grep 8787
+
+# 检查防火墙状态
+sudo ufw status
+# 或
+sudo firewall-cmd --list-ports
+```
+
+#### 问题：下载失败，提示 ffmpeg 未找到
+```bash
+# 检查 ffmpeg 是否安装
+which ffmpeg
+ffmpeg -version
+
+# 若不存在，重新安装
+sudo apt install -y ffmpeg
+```
+
+#### 问题：提示权限不足无法写入文件
+```bash
+# 检查下载目录权限
+ls -la /path/to/downloads
+
+# 修正权限
+sudo chown -R www-data:www-data /path/to/downloads
+sudo chmod -R 755 /path/to/downloads
+```
+
+#### 问题：Systemd 服务启动失败
+```bash
+# 查看详细错误日志
+sudo journalctl -u ovd -n 50 --no-pager
+
+# 检查 WorkingDirectory 和 ExecStart 路径是否正确
+```
+
 ## 远程服务器部署
 
 将程序部署在远程服务器上使用：
